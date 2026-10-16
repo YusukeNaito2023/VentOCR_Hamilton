@@ -1,0 +1,20 @@
+{
+  "initial_ocr": {
+    "ocr_keys": [
+      "VTE",
+      "Compliance",
+      "Ppeak"
+    ],
+    "use_gpu": true,
+    "diff_thresh": 3.0
+  },
+  "post_ocr": {
+    "breath_trigger": [
+      "Compliance",
+      "VTE"
+    ],
+    "boundary_shift_sec": -0.5,
+    "stable_frames": 2,
+    "trim_to_breath": true
+  }
+}

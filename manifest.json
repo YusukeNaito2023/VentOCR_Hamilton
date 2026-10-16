@@ -1,0 +1,156 @@
+{
+  "engine_key": "hamilton_ventocr",
+  "display_name": "Hamilton",
+  "developer": "VentOCR Developer Team",
+  "version": "0.7.0",
+  "ventocr_min": "0.5.5",
+  "description": "Hamilton ventilator OCR engine. Breath = display update of Compliance / VTE. OCR (selectable): VTE, Compliance, Ppeak, MinVol, P0.1, mode, set rate / ΔPinsp / PEEP / oxygen. Waveforms: Paw (Pressure), Flow, Volume, Pes with wrap-around sweep (50 px/s, 22 s per sweep on 1920x1080).",
+  "base_resolution": "1920x1080",
+  "supported_resolutions": [
+    "1920x1080"
+  ],
+  "has_extract_waves": true,
+  "output_columns": {
+    "frames": [
+      "Frame",
+      "VTE",
+      "Compliance",
+      "Ppeak",
+      "MinVol",
+      "P01",
+      "Mode",
+      "Set_Rate",
+      "Set_Pinsp",
+      "Set_PEEP",
+      "Set_Oxygen",
+      "Sweep_X",
+      "BreathMark"
+    ],
+    "breaths": [
+      "BreathNumber",
+      "VTE",
+      "Compliance",
+      "Ppeak",
+      "MinVol",
+      "P01",
+      "Mode",
+      "Set_Rate",
+      "Set_Pinsp",
+      "Set_PEEP",
+      "Set_Oxygen",
+      "Duration"
+    ]
+  },
+  "breath_summary": [
+    "VTE",
+    "Compliance",
+    "Ppeak",
+    "MinVol",
+    "P01",
+    "Mode",
+    "Set_Rate",
+    "Set_Pinsp",
+    "Set_PEEP",
+    "Set_Oxygen",
+    "VTE_displayed",
+    "Compliance_displayed",
+    "Ppeak_displayed",
+    "MinVol_displayed",
+    "P01_displayed"
+  ],
+  "labels": {
+    "Ppeak": "Ppeak（ピーク圧）",
+    "MinVol": "MinVol（分時換気量）",
+    "P01": "P0.1",
+    "Mode": "換気モード",
+    "Set_Rate": "呼吸回数（設定）",
+    "Set_Pinsp": "Δ吸気圧（設定）",
+    "Set_PEEP": "PEEP（設定）",
+    "Set_Oxygen": "酸素濃度（設定）",
+    "VTE_displayed": "VTE (displayed)",
+    "Compliance_displayed": "Compliance (displayed)",
+    "Ppeak_displayed": "Ppeak (displayed)",
+    "MinVol_displayed": "MinVol (displayed)",
+    "P01_displayed": "P0.1 (displayed)"
+  },
+  "accuracy": {
+    "VTE": {
+      "method": null,
+      "threshold": null,
+      "unit": "mL"
+    },
+    "Compliance": {
+      "method": null,
+      "threshold": null,
+      "unit": "mL/cmH2O"
+    },
+    "Ppeak": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "MinVol": {
+      "method": null,
+      "threshold": null,
+      "unit": "L/min"
+    },
+    "P01": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "Mode": {
+      "method": null,
+      "threshold": null
+    },
+    "Set_Rate": {
+      "method": null,
+      "threshold": null,
+      "unit": "b/min"
+    },
+    "Set_Pinsp": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "Set_PEEP": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "Set_Oxygen": {
+      "method": null,
+      "threshold": null,
+      "unit": "%"
+    },
+    "VTE_displayed": {
+      "method": null,
+      "threshold": null,
+      "unit": "mL"
+    },
+    "Compliance_displayed": {
+      "method": null,
+      "threshold": null,
+      "unit": "mL/cmH2O"
+    },
+    "Ppeak_displayed": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "MinVol_displayed": {
+      "method": null,
+      "threshold": null,
+      "unit": "L/min"
+    },
+    "P01_displayed": {
+      "method": null,
+      "threshold": null,
+      "unit": "cmH2O"
+    },
+    "BreathMark": {
+      "method": null,
+      "threshold": null
+    }
+  }
+}
