@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.8.0"
+ENGINE_VERSION = "0.8.1"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -423,8 +423,9 @@ def _shown_value(series):
     return max(best, key=lambda v: last[v])
 
 
-def trigger_events(apexes, pen, hidden, speed, fps):
-    """新しく描かれた患者トリガーの三角（▲）の位置 = 吸気の始まり（行番号、時間順）。
+def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
+    """新しく描かれた患者トリガーの三角（▲）の位置 = 吸気の始まり。(行番号のリスト, 頂点の通しの位置 u のリスト)（時間順）。
+    sweep_u: 各フレームの通しの位置（Sweep_U）。無ければ u は NaN。
 
     apexes: 各フレームの Trigger_Apexes（頂点の x を ";" でつないだ文字列）, pen: 各フレームのペン先（画面の x）,
     hidden: 気道内圧の欄が見えないフレーム（ポップアップなど）, speed: 掃引の速さ（px/フレーム）。
@@ -460,12 +461,12 @@ def trigger_events(apexes, pen, hidden, speed, fps):
                 # （ペン先が通った列は消されるので、1周前の三角は消える）
                 if not (all(q > pen[i - 1] for q in same) and stays(i, x)):
                     continue
-            found.append(i - max(lag, 0) / speed)
+            found.append((i - max(lag, 0) / speed, sweep_u[i] - lag if sweep_u is not None else np.nan))
     out = []
-    for t in sorted(found):
-        if not out or t - out[-1] > Settings.TRIGGER_DEDUP_SEC * fps:
-            out.append(t)
-    return [int(round(t)) for t in out]
+    for t, uu in sorted(found):
+        if not out or t - out[-1][0] > Settings.TRIGGER_DEDUP_SEC * fps:
+            out.append((t, uu))
+    return [int(round(t)) for t, _ in out], [uu for _, uu in out]
 
 
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
@@ -542,8 +543,9 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     paw_seen = df["Axis_Filled_Pressure"].eq(0) if "Axis_Filled_Pressure" in df else pd.Series(False, index=df.index)
     paw_hidden = (df["Abnormal"] == 1) & ~paw_seen
     df["Paw_Hidden"] = paw_hidden.astype(int)
-    triggers_at = trigger_events(df["Trigger_Apexes"].fillna("").to_numpy(object) if "Trigger_Apexes" in df else [""] * n,
-                                 df["Sweep_X"].to_numpy(float), paw_hidden.to_numpy(bool), sw["speed"], fps)
+    triggers_at, triggers_u = trigger_events(
+        df["Trigger_Apexes"].fillna("").to_numpy(object) if "Trigger_Apexes" in df else [""] * n,
+        df["Sweep_X"].to_numpy(float), paw_hidden.to_numpy(bool), sw["speed"], fps, sw["u"])
     before = int(round(Settings.TRIGGER_UPDATE_BEFORE_SEC * fps))
     after = int(round(Settings.TRIGGER_UPDATE_AFTER_SEC * fps))
     lag = int(round(Settings.TRIGGER_UPDATE_LAG_SEC * fps))
@@ -568,6 +570,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df.loc[display_updates, "Display_Update"] = 1
     df["Trigger_New"] = 0
     df.loc[triggers_at, "Trigger_New"] = 1     # 新しく描かれた三角（吸気の始まり）
+    df["Trigger_U"] = np.nan
+    df.loc[triggers_at, "Trigger_U"] = np.round(triggers_u, 1)   # 三角の頂点の通しの位置（extract_waves で区切りを合わせる）
     df["Trigger_Split"] = 0
     df.loc[split_updates, "Trigger_Split"] = 1  # 三角で足した区切り（表示の更新があったものとして扱う位置）
 
@@ -636,12 +640,17 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         if g["Abnormal"].any():
             alerts.append("Abnormal")
         row["Abnormal"] = int(g["Abnormal"].any())
-        # 縦軸の換算式 = 波形を切り出す最後のフレームのもの。P_min / P_max などは目盛りの最小・最大
+        # 縦軸の換算式 = 波形を切り出す最後のフレームのもの。
+        # 0.8.1: P_min / P_max などは描画領域の下端・上端の値（呼吸器の画面に見える範囲）。0.8.0 までは目盛りの最小・最大の数字で、
+        # 一番下の目盛りより下にも描画領域があるため、その範囲に出た波形（Ptranspulm・Volume の負の部分など）がチャートの外に出ていた。
+        # 目盛りの最小・最大は Axis_<波形> の3・4番目に残っている
         for name, spec in Settings.WAVES.items():
             text = df.at[e, f"Axis_{name}"] if f"Axis_{name}" in df else None
             cal = axis_scale.decode(text)
             row[f"Axis_{name}"] = text if cal is not None else ""
-            row[f"{spec['scale_prefix']}_min"], row[f"{spec['scale_prefix']}_max"] = (cal[2], cal[3]) if cal else spec["axis"]
+            a, b = cal[:2] if cal else _CAL[name]
+            top, bottom = spec["area"]
+            row[f"{spec['scale_prefix']}_min"], row[f"{spec['scale_prefix']}_max"] = round(a * bottom + b, 2), round(a * top + b, 2)
             filled = cal is None or (f"Axis_Filled_{name}" in df and df.at[e, f"Axis_Filled_{name}"] == 1)
             if filled and not row["Abnormal"]:
                 alerts.append("Axis?")   # このフレームでは目盛りを読めず、前の目盛り（または既定）で換算する
@@ -959,9 +968,11 @@ def _inspiration_onsets(flow, rate):
     return out
 
 
-def _snap_to_breaths(items):
-    """items: 時間順の dict のリスト {"wave": DataFrame（Flow 列, 行=点）または None, "t0": 秒, "rate": 点/秒}。
-    各 item に "wave"（切り直した波形）, "t0", "rate", "trim_head", "trim_tail"（元の範囲から削った/渡した点の数。負は前後から受け取った点）を書き込む。"""
+def _snap_to_breaths(items, trigger_u=()):
+    """items: 時間順の dict のリスト {"wave": DataFrame（X, Flow 列, 行=点）または None, "t0": 秒, "rate": 点/秒}。
+    各 item に "wave"（切り直した波形）, "t0", "rate", "trim_head", "trim_tail"（元の範囲から削った/渡した点の数。負は前後から受け取った点）を書き込む。
+    trigger_u: 患者トリガーの三角の頂点の通しの位置（X と同じ単位）。0.8.1: 自発の呼吸の区切りは、流量の吸気の始まりではなく三角に合わせる"""
+    trigger_u = np.sort(np.asarray([t for t in trigger_u if np.isfinite(t)], float))
     # つながっている呼吸のまとまりに分ける
     groups, cur = [], []
     for i, it in enumerate(items):
@@ -990,18 +1001,33 @@ def _snap_to_breaths(items):
         lead = max(1, int(round(TRIM_LEAD_SEC * rate)))
         flow = cat["Flow"].to_numpy(float)
         on = np.array(_inspiration_onsets(flow, rate), int)
+        # 三角の位置（cat の行）。三角は Hamilton が自発トリガーと判定した位置そのもので、流量の立ち上がりは、前の吸気の流れが
+        # 続いたまま次の呼吸に入ると見つからず、呼気の途中でトリガーされると呼気の一番下までさかのぼってしまう
+        # （Ptranspulm 2026-10-09 の B79/80・B94・B96: 区切りが Hamilton の呼吸の始まりより 0.3〜0.5 秒早かった）
+        xs_cat = cat["X"].to_numpy(float)
+        tri = trigger_u[(trigger_u >= xs_cat[0]) & (trigger_u <= xs_cat[-1])]
+        tri = np.array([int(np.argmin(np.abs(xs_cat - t))) for t in tri], int)
+        tri_lead = int(round(Settings.TRIGGER_SNAP_LEAD_SEC * rate))
         valid = cat[[c for c in cat.columns if c != "X" and not c.startswith("_")]].notna().any(axis=1).to_numpy()
         new = bounds.copy()
         # 先頭: 空の行と、最初の呼吸の吸気の始まりより前
         lo = int(np.argmax(valid)) if valid.any() else 0
         first = on[on < (bounds[0] + bounds[1]) // 2]   # 最初の呼吸の前半にある吸気の始まり
-        new[0] = max(lo, int(first[0]) - lead) if len(first) else lo
+        first_tri = tri[tri < (bounds[0] + bounds[1]) // 2]
+        if len(first_tri):
+            new[0] = max(lo, int(first_tri[0]) - tri_lead)
+        else:
+            new[0] = max(lo, int(first[0]) - lead) if len(first) else lo
         # 呼吸の間の区切り: 前後の呼吸の真ん中より内側にある吸気の始まりのうち、元の区切りに最も近いもの
         for j in range(1, len(g)):
             a = (bounds[j - 1] + bounds[j]) // 2
             b = (bounds[j] + bounds[j + 1]) // 2
+            cand_tri = tri[(tri > a) & (tri < b)]
             cand = on[(on > a) & (on < b)]
-            if len(cand):
+            if len(cand_tri):   # 自発の呼吸: 三角に合わせる
+                o = int(cand_tri[np.argmin(np.abs(cand_tri - bounds[j]))])
+                new[j] = o - tri_lead
+            elif len(cand):     # 強制の呼吸: 流量の吸気の始まりに合わせる（今までどおり）
                 o = int(cand[np.argmin(np.abs(cand - bounds[j]))])
                 new[j] = o - lead
         # 末尾: 空の行と、呼気を伴わない最後の吸気（次の呼吸の吸気の途中）
@@ -1282,7 +1308,8 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
 
     # 区切りを吸気の始まりへ合わせる（呼吸どうしの波形はつながっているので、点を前後の呼吸の間で移す）
     if opts.get("trim_to_breath", True):
-        _snap_to_breaths(items)
+        tri_u = df_frames["Trigger_U"].dropna().to_numpy(float) if "Trigger_U" in df_frames else ()
+        _snap_to_breaths(items, tri_u)
     for it in items:
         wave, rec = it["wave"], it["rec"]
         if wave is None or len(wave) == 0:
