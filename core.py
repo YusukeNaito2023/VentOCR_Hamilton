@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.8.1"
+ENGINE_VERSION = "0.8.2"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -300,18 +300,24 @@ def track_sweep(sweep_raw, sweep_run, fps, abnormal=None):
     XL, XR = Settings.SWEEP_X_LEFT, Settings.SWEEP_X_RIGHT
     raw = np.asarray(sweep_raw, float) - Settings.SWEEP_ERASE_OFFSET
     run = np.asarray(sweep_run, float) if sweep_run is not None else np.full(len(raw), np.nan)
-    raw[run > Settings.SWEEP_RUN_MAX] = np.nan
+    # 1フレームの進み（掃引の速さ / fps）より広いまとまりだけを描き直しとみなす（低い fps では1フレームで 40px 以上進む。engine_api 2）
+    raw[run > max(Settings.SWEEP_RUN_MAX, 3 * Settings.SWEEP_PX_PER_SEC / fps)] = np.nan
     n = len(raw)
     speed = Settings.SWEEP_PX_PER_SEC / fps
     if n == 0:
         return {"pen": raw, "u": raw, "pass_": np.zeros(0, int), "wrap": np.zeros(0, int),
                 "detected": np.zeros(0, bool), "speed": speed}
 
-    # 速さ: 隣どうしの検出値の進み（0 < d < 4倍の既定値）の中央値
-    d = np.diff(raw)
-    steps = d[(d > 0) & (d < 4 * speed)]
-    if len(steps) >= 20:
-        speed = float(np.median(steps))
+    # 速さ: 続けて検出できた値どうしの進み ÷ 間のフレーム数（1フレームあたり 0 < d < 4倍の既定値）の中央値。
+    # 0.8.1 までは隣り合うフレームの検出値の差だけを使っていた。高い fps では1フレームの進みが小さく（30 fps で 1.7px）、
+    # 検出できるのは大きく進んだフレームに偏るので、速さを大きく見積もっていた（30 fps で 90 px/秒。engine_api 2）
+    vi = np.flatnonzero(np.isfinite(raw))
+    if len(vi) >= 2:
+        gap = np.diff(vi)
+        step = np.diff(raw[vi]) / gap
+        ok = (gap <= max(1, int(round(fps)))) & (step > 0) & (step < 4 * speed)
+        if ok.sum() >= 20:
+            speed = float(np.median(step[ok]))
     margin = Settings.SWEEP_RESTART_MARGIN
 
     # 検出値を順に確かめる: 前に採用した位置から自然に進んだもの、または左端から描き始めたものだけを採用する
@@ -433,12 +439,14 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
     その位置をペン先が通った時刻（行番号）を返す。1周前の三角（ペン先より右に残っているもの）と、
     気道内圧の欄が見えないフレーム（とその次のフレーム）は使わない。"""
     lo, hi = Settings.TRIGGER_NEW_LAG_PX
+    hi = max(hi, 4 + 2 * speed)   # 低い fps では、三角が見えたときにペン先が1フレーム分（speed px）先へ進んでいる（engine_api 2）
+    keep_frames = max(2, int(round(Settings.TRIGGER_KEEP_SEC * fps)))
     xs = [[float(v) for v in str(text).split(";") if v not in ("", "nan")] for text in apexes]
     n = len(xs)
 
     def stays(i, x):
         """頂点 x が、ペン先が TRIGGER_KEEP_PX 以上先へ進んだ後のフレームにも残っているか（消されずに描き直されたもの）"""
-        for j in range(i + 1, min(i + 1 + Settings.TRIGGER_KEEP_FRAMES, n)):
+        for j in range(i + 1, min(i + 1 + keep_frames, n)):
             if hidden[j] or not np.isfinite(pen[j]):
                 return False
             if pen[j] - x >= Settings.TRIGGER_KEEP_PX:
@@ -446,10 +454,12 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
         return False
 
     found = []
-    for i in range(n):
-        if hidden[i] or (i > 0 and hidden[i - 1]) or not np.isfinite(pen[i]):
+    for i in range(1, n):
+        # 最初のフレームは前のフレームが無く、新しい三角か判断できない（画面に残っている三角まで数え、その時刻が動画の始まりより前の
+        # 負の行番号になって post_ocr が止まっていた: 動画の途中から切り出した解析の KeyError '[-2] not in index'。0.8.2）
+        if hidden[i] or hidden[i - 1] or not np.isfinite(pen[i]):
             continue
-        prev = xs[i - 1] if i > 0 else []
+        prev = xs[i - 1]
         for x in xs[i]:
             lag = pen[i] - x
             if not lo <= lag <= hi:
@@ -461,7 +471,7 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
                 # （ペン先が通った列は消されるので、1周前の三角は消える）
                 if not (all(q > pen[i - 1] for q in same) and stays(i, x)):
                     continue
-            found.append((i - max(lag, 0) / speed, sweep_u[i] - lag if sweep_u is not None else np.nan))
+            found.append((max(i - max(lag, 0) / speed, 0.0), sweep_u[i] - lag if sweep_u is not None else np.nan))
     out = []
     for t, uu in sorted(found):
         if not out or t - out[-1][0] > Settings.TRIGGER_DEDUP_SEC * fps:
@@ -479,7 +489,9 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     opts = settings.get("post_ocr", {})
     fps = float(opts.get("fps", 10))
     triggers = [k for k in opts.get("breath_trigger", ["Compliance", "VTE"]) if k in df.columns]
-    stable = max(1, int(opts.get("stable_frames", 2)))
+    # stable_frames は 10 fps のときのフレーム数。ほかの fps では同じ時間になるよう換算する（engine_api 2）
+    stable = max(1, int(round(int(opts.get("stable_frames", 2)) * fps / 10)))
+    merge = max(1, int(round(Settings.UPDATE_MERGE_SEC * fps)))
     shift = int(round(float(opts.get("boundary_shift_sec", -0.5)) * fps))
 
     df = df.sort_values("Frame").reset_index(drop=True).copy()
@@ -531,7 +543,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         events += confirmed_changes(vals.to_numpy(object), stable)
     updates = []
     for i in sorted(set(events)):
-        if not updates or i - updates[-1] > 1:
+        if not updates or i - updates[-1] > merge:
             updates.append(int(i))
     display_updates = list(updates)
 

@@ -41,7 +41,7 @@ ENGINE_SETTINGS_SCHEMA = {
         "stable_frames": {
             "type": "int",
             "default": 2,
-            "label": "値の変化とみなすのに続くフレーム数（VTE・コンプライアンス）"
+            "label": "値の変化とみなすのに続くフレーム数（VTE・コンプライアンス。10 fps のとき。ほかの fps では同じ時間に換算）"
         },
         "trim_to_breath": {
             "type": "bool",
