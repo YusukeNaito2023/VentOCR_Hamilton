@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.7.4"
+ENGINE_VERSION = "0.8.0"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -190,7 +190,7 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 
     Returns:
         pd.DataFrame (columns: Frame, BreathMark, <値>, <値>_raw, <値>_conf（選んだ値ごと）,
-                      OCR_Done, Sweep_Raw, Sweep_Run, Axis_OK, Axis_Pressure, Axis_Flow, Axis_Volume, Axis_Pes)
+                      OCR_Done, Sweep_Raw, Sweep_Run, Trigger_Apexes, Axis_OK, Axis_Pressure, Axis_Flow, Axis_Volume, Axis_Pes)
         Axis_<波形> は縦軸の目盛りから求めた換算式 "a;b;最小の目盛り;最大の目盛り"（値 = a*y + b）。読めなければ空
     """
     opts = settings.get("initial_ocr", {})
@@ -247,6 +247,9 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
             row["Sweep_Raw"] = sweep
             row["Sweep_Run"] = sweep_run   # 変化した列の幅（画面全体の描き直しでは 1000 列以上になり、掃引位置ではない）
 
+            # --- 患者トリガーの三角（▲）の頂点の x（";" 区切り）。新しく描かれたものかは post_ocr でペン先の位置から判断する ---
+            row["Trigger_Apexes"] = ";".join(f"{x:.1f}" for x in trigger_apexes(frame))
+
             # --- 縦軸の目盛り（数字の列が変わったときだけ読む）。Axis_OK = 目盛りが読めた波形の数 ---
             axis_img = gray[:, ax_x0:ax_x1].astype(np.int16)
             if last_axis_img is None or np.abs(axis_img - last_axis_img).mean() > 1.0:
@@ -276,12 +279,14 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 # ことがあり、モデルが前後30秒をならすため、その前後でペン先の位置がずれて波形がでたらめになった。
 # そこで V600 と同じく、毎フレームのペン先を直接追跡する。
 
-def track_sweep(sweep_raw, sweep_run, fps):
+def track_sweep(sweep_raw, sweep_run, fps, abnormal=None):
     """各フレームのペン先を追跡する。
 
     Args:
         sweep_raw: 各フレームで検出した掃引位置（前のフレームから変化した列のまとまりの右端、画面の x）。無ければ NaN
         sweep_run: そのまとまりの幅（SWEEP_RUN_MAX を超えるものは画面全体の描き直しで、掃引位置ではない）
+        abnormal: 各フレームの Abnormal（ポップアップなど）。ポップアップの間も掃引は止まらず、上の気道内圧の欄で検出できるが、
+            ポップアップの描画も変化として検出されるので、左端からの描き始めは右端まで描き終えたはずのときだけ認める（0.8.0）
     Returns:
         dict(
             pen:   各フレームのペン先（画面の x）,
@@ -310,6 +315,7 @@ def track_sweep(sweep_raw, sweep_run, fps):
     margin = Settings.SWEEP_RESTART_MARGIN
 
     # 検出値を順に確かめる: 前に採用した位置から自然に進んだもの、または左端から描き始めたものだけを採用する
+    abn = np.zeros(n, bool) if abnormal is None else np.asarray(abnormal, bool)
     acc = np.full(n, np.nan)
     last = None
     for i in range(n):
@@ -319,7 +325,12 @@ def track_sweep(sweep_raw, sweep_run, fps):
         if last is not None:
             gap = i - last[0]
             dd = p - last[1]
-            if not (-1 <= dd <= 2 * speed * gap + 8 or p <= XL + speed * gap + margin):
+            restart = p <= XL + speed * gap + margin
+            if restart and abn[i] and last[1] + speed * gap < XR - 1 - margin:
+                # ポップアップの描画を左端からの描き始めと取り違えない（Ptranspulm 2026-10-09 のフレーム 30471: 0.7.4 までは
+                # ここで次の周に入ったとみなし、その後のポップアップの間のペン先がずれていた）
+                restart = False
+            if not (-1 <= dd <= 2 * speed * gap + 8 or restart):
                 continue
         acc[i] = p
         last = (i, p)
@@ -412,6 +423,51 @@ def _shown_value(series):
     return max(best, key=lambda v: last[v])
 
 
+def trigger_events(apexes, pen, hidden, speed, fps):
+    """新しく描かれた患者トリガーの三角（▲）の位置 = 吸気の始まり（行番号、時間順）。
+
+    apexes: 各フレームの Trigger_Apexes（頂点の x を ";" でつないだ文字列）, pen: 各フレームのペン先（画面の x）,
+    hidden: 気道内圧の欄が見えないフレーム（ポップアップなど）, speed: 掃引の速さ（px/フレーム）。
+    前のフレームに無く、ペン先のすぐ後ろ（TRIGGER_NEW_LAG_PX）にある頂点を新しい三角とし、
+    その位置をペン先が通った時刻（行番号）を返す。1周前の三角（ペン先より右に残っているもの）と、
+    気道内圧の欄が見えないフレーム（とその次のフレーム）は使わない。"""
+    lo, hi = Settings.TRIGGER_NEW_LAG_PX
+    xs = [[float(v) for v in str(text).split(";") if v not in ("", "nan")] for text in apexes]
+    n = len(xs)
+
+    def stays(i, x):
+        """頂点 x が、ペン先が TRIGGER_KEEP_PX 以上先へ進んだ後のフレームにも残っているか（消されずに描き直されたもの）"""
+        for j in range(i + 1, min(i + 1 + Settings.TRIGGER_KEEP_FRAMES, n)):
+            if hidden[j] or not np.isfinite(pen[j]):
+                return False
+            if pen[j] - x >= Settings.TRIGGER_KEEP_PX:
+                return any(abs(x - q) <= Settings.TRIGGER_SAME_PX for q in xs[j])
+        return False
+
+    found = []
+    for i in range(n):
+        if hidden[i] or (i > 0 and hidden[i - 1]) or not np.isfinite(pen[i]):
+            continue
+        prev = xs[i - 1] if i > 0 else []
+        for x in xs[i]:
+            lag = pen[i] - x
+            if not lo <= lag <= hi:
+                continue
+            same = [q for q in prev if abs(x - q) <= Settings.TRIGGER_SAME_PX]
+            if same:
+                # 1周前の三角とほぼ同じ位置に新しい三角が描かれることがある（Ptranspulm 2026-10-09 の B237・B452）。
+                # 前のフレームではペン先より右（1周前）にあり、ペン先が通り過ぎた後も残っていれば描き直されたもの
+                # （ペン先が通った列は消されるので、1周前の三角は消える）
+                if not (all(q > pen[i - 1] for q in same) and stays(i, x)):
+                    continue
+            found.append(i - max(lag, 0) / speed)
+    out = []
+    for t in sorted(found):
+        if not out or t - out[-1] > Settings.TRIGGER_DEDUP_SEC * fps:
+            out.append(t)
+    return [int(round(t)) for t in out]
+
+
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
     呼吸の区切り（数値の表示の更新）を求め、呼吸番号・ペン先の位置を付ける。
@@ -446,6 +502,18 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             df[f"Axis_Filled_{name}"] = (~read).astype(int)
             df[col] = df[col].where(read).ffill().fillna("")
 
+    # --- ペン先の位置 ---
+    sw = track_sweep(df["Sweep_Raw"].to_numpy(float) if "Sweep_Raw" in df else np.full(n, np.nan),
+                     df["Sweep_Run"].to_numpy(float) if "Sweep_Run" in df else None, fps, df["Abnormal"].to_numpy(int))
+    df["Sweep_U"] = np.round(sw["u"], 2)
+    df["Sweep_X"] = np.round(sw["pen"], 1)
+    df["Sweep_Pass"] = sw["pass_"]
+    df["Sweep_Wrap"] = sw["wrap"]
+    df["Sweep_Detected"] = sw["detected"].astype(int)
+    df["Sweep_Rate"] = round(sw["speed"] * fps, 4)  # px/秒
+    print(f"[post_ocr] sweep {sw['speed'] * fps:.2f} px/s, detected {sw['detected'].mean() * 100:.1f}% of frames, "
+          f"{int((sw['wrap'] == 1).sum())} wraps, {int((sw['wrap'] == 2).sum())} restarts")
+
     # --- 呼吸の区切り: 表示の更新 ---
     # 0.7.0: トリガー列（VTE・コンプライアンス）ごとに、新しい値が stable_frames（2）フレーム以上続いたら「変化」。
     # 区切りはその値が出た最初のフレーム。空欄（「---」・読めない）も1つの値として扱う。1フレームだけの値は無視する。
@@ -464,6 +532,30 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     for i in sorted(set(events)):
         if not updates or i - updates[-1] > 1:
             updates.append(int(i))
+    display_updates = list(updates)
+
+    # 0.8.0: 患者トリガーの三角（吸気の始まり）の近くに表示の更新が無ければ、三角の少し後に更新があったものとして区切る。
+    # 前後の呼吸の VTE・コンプライアンスがたまたま同じ値だと、Hamilton は2呼吸として記録しても表示が変わらない
+    # （Ptranspulm 2026-10-09 の B87: Study Recorder の 8899・8900 がどちらも 404 mL / 52.8）
+    abn = df["Abnormal"].to_numpy(int)
+    # 三角は、Abnormal でも気道内圧の縦軸を読めた（気道内圧の欄が見えている）フレームなら使う（ポップアップは下の欄を覆うことが多い）
+    paw_seen = df["Axis_Filled_Pressure"].eq(0) if "Axis_Filled_Pressure" in df else pd.Series(False, index=df.index)
+    paw_hidden = (df["Abnormal"] == 1) & ~paw_seen
+    df["Paw_Hidden"] = paw_hidden.astype(int)
+    triggers_at = trigger_events(df["Trigger_Apexes"].fillna("").to_numpy(object) if "Trigger_Apexes" in df else [""] * n,
+                                 df["Sweep_X"].to_numpy(float), paw_hidden.to_numpy(bool), sw["speed"], fps)
+    before = int(round(Settings.TRIGGER_UPDATE_BEFORE_SEC * fps))
+    after = int(round(Settings.TRIGGER_UPDATE_AFTER_SEC * fps))
+    lag = int(round(Settings.TRIGGER_UPDATE_LAG_SEC * fps))
+    abn_before = int(round(Settings.TRIGGER_ABNORMAL_BEFORE_SEC * fps))
+    split_updates = []
+    for t in triggers_at:
+        if t + after >= n or abn[max(t - abn_before, 0):t + after + 1].any():
+            continue   # 録画の終わり・Abnormal の近くは、表示の更新が見えていないだけかもしれない
+        if any(t - before <= u <= t + after for u in display_updates):
+            continue
+        split_updates.append(t + lag)
+    updates = sorted(set(updates) | set(split_updates))
 
     # 区切りの位置を boundary_shift_sec だけずらす（表示の更新は吸気の始まりより少し遅れる）
     bounds = sorted({min(max(u + shift, 0), n - 1) for u in updates})
@@ -473,21 +565,13 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     if not bounds or bounds[0] > 0:
         df["BreathNumber"] += 1          # 最初の区切りより前は呼吸1（途中から始まる呼吸）
     df["Display_Update"] = 0
-    df.loc[updates, "Display_Update"] = 1
+    df.loc[display_updates, "Display_Update"] = 1
+    df["Trigger_New"] = 0
+    df.loc[triggers_at, "Trigger_New"] = 1     # 新しく描かれた三角（吸気の始まり）
+    df["Trigger_Split"] = 0
+    df.loc[split_updates, "Trigger_Split"] = 1  # 三角で足した区切り（表示の更新があったものとして扱う位置）
 
     df["Time"] = df["Frame"].apply(lambda f: _format_time(f, fps))
-
-    # --- ペン先の位置 ---
-    sw = track_sweep(df["Sweep_Raw"].to_numpy(float) if "Sweep_Raw" in df else np.full(n, np.nan),
-                     df["Sweep_Run"].to_numpy(float) if "Sweep_Run" in df else None, fps)
-    df["Sweep_U"] = np.round(sw["u"], 2)
-    df["Sweep_X"] = np.round(sw["pen"], 1)
-    df["Sweep_Pass"] = sw["pass_"]
-    df["Sweep_Wrap"] = sw["wrap"]
-    df["Sweep_Detected"] = sw["detected"].astype(int)
-    df["Sweep_Rate"] = round(sw["speed"] * fps, 4)  # px/秒
-    print(f"[post_ocr] sweep {sw['speed'] * fps:.2f} px/s, detected {sw['detected'].mean() * 100:.1f}% of frames, "
-          f"{int((sw['wrap'] == 1).sum())} wraps, {int((sw['wrap'] == 2).sum())} restarts")
 
     # --- 呼吸ごとの表 ---
     # 0.7.1: 測定値の割り当ては表示の更新（Display_Update）の区間で行う。
@@ -535,7 +619,16 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
                 row[f"{key}_displayed"] = shown(key, windows[k]) if windows[k] is not None else _mode(normal[key])
             else:
                 row[key] = _mode(normal[key])
+        # 患者トリガー: この呼吸の間に新しい三角が描かれたら A（自発）、無ければ C（強制）。
+        # 気道内圧の欄が見えないフレームを含む呼吸で三角が無いときは、隠れていたかもしれないので空欄
+        if g["Trigger_New"].any():
+            row["Trigger"] = "A"
+        else:
+            row["Trigger"] = "" if g["Paw_Hidden"].any() else "C"
         alerts = []
+        u0 = start_update.get(s)
+        if u0 is not None and u0 in split_updates:
+            alerts.append("TriggerSplit")   # 表示が変わらず、三角で区切った呼吸
         if k == 0 and (not bounds or bounds[0] > 0):
             alerts.append("Fragment")   # 録画の途中から始まる呼吸
         if nxt is None:
@@ -557,7 +650,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df_breaths = pd.DataFrame(rows)
     df["Alert"] = df["BreathNumber"].map(df_breaths.set_index("BreathNumber")["Alert"]).fillna("")
 
-    print(f"[post_ocr] {len(df)} frames, {len(df_breaths)} breaths ({len(updates)} display updates)")
+    print(f"[post_ocr] {len(df)} frames, {len(df_breaths)} breaths ({len(display_updates)} display updates, "
+          f"{len(triggers_at)} trigger marks, {len(split_updates)} split by trigger marks)")
     return df, df_breaths
 
 
@@ -762,6 +856,31 @@ def _wave_masks(frame):
     return out
 
 
+def trigger_apexes(frame):
+    """患者トリガーの三角（▲）の頂点の x（画面の列）の一覧。frame は _normalize_frame 済みの BGR。"""
+    y0, y1 = Settings.TRIGGER_ROWS
+    hsv = cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2HSV)
+    d = np.abs(hsv[..., 0].astype(np.int16) - Settings.TRIGGER_HUE)
+    d = np.minimum(d, 180 - d)
+    mask = ((d <= Settings.TRIGGER_HUE_TOL) & (hsv[..., 1] >= Settings.TRIGGER_SAT_MIN)
+            & (hsv[..., 2] >= Settings.TRIGGER_VAL_MIN)).astype(np.uint8)
+    # 時間軸の目盛りの数字（白）と重なった三角は、動画の圧縮で色がにじんで小片に分かれるので、閉じてから1つのかたまりにする
+    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones(Settings.TRIGGER_CLOSE, np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
+    out = []
+    for i in range(1, n):
+        x, y, w, h = stats[i, :4]
+        if not (Settings.TRIGGER_HEIGHT[0] <= h <= Settings.TRIGGER_HEIGHT[1]
+                and Settings.TRIGGER_WIDTH[0] <= w <= Settings.TRIGGER_WIDTH[1]):
+            continue
+        ys, xs = np.nonzero((labels[y:y + h, x:x + w] == i) & (mask[y:y + h, x:x + w] > 0))
+        if len(ys) == 0:
+            continue
+        top = ys < ys.min() + Settings.TRIGGER_APEX_ROWS
+        out.append(float(x + xs[top].mean()))
+    return out
+
+
 def _fill_small_gaps(v, max_gap):
     v = v.copy()
     nan = ~np.isfinite(v)
@@ -962,6 +1081,23 @@ def _wider_axis_frame(name, after, passes, xs, df_frames, pas, pen, abn, max_fra
     return None
 
 
+def _after_popup_frame(after, passes, xs, pas, pen, abn, wrap, max_frames):
+    """after（Abnormal のフレーム）の後で最初の Abnormal でないフレームと、列 xs（周 passes）のうちそのフレームにまだ残っている列。
+    ポップアップの間も Hamilton は裏で波形を描き続けるので、ポップアップが消えた直後のフレームには、ポップアップの間に描かれた列が
+    （上書きされていなければ）残っている。途中で画面が消去されて左端に戻ったら（wrap = 2）残っていない。見つからなければ (None, None)"""
+    n = len(abn)
+    for g in range(after + 1, min(after + 1 + max_frames, n)):
+        if wrap[g] == 2:
+            return None, None
+        if abn[g]:
+            continue
+        # 列が残っている: 同じ周でペン先より左、または次の周でペン先（と消去帯）より右
+        same = (passes == pas[g]) & (xs <= pen[g])
+        prev = (passes == pas[g] - 1) & (xs > pen[g] + 8)
+        return g, same | prev
+    return None, None
+
+
 def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                   settings={}, overwrite=False, archive_dir=None):
     """
@@ -989,6 +1125,9 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     pas = df_frames["Sweep_Pass"].to_numpy(int) if "Sweep_Pass" in df_frames else np.zeros(len(df_frames), int)
     wrap = df_frames["Sweep_Wrap"].to_numpy(int) if "Sweep_Wrap" in df_frames else np.zeros(len(df_frames), int)
     abn = df_frames["Abnormal"].to_numpy(int) if "Abnormal" in df_frames else np.zeros(len(df_frames), int)
+    # そのフレームで気道内圧の縦軸の目盛りを読めた = 気道内圧の欄が見えている（ポップアップの間も見えていることが多い）
+    paw_seen = (df_frames["Axis_Filled_Pressure"].to_numpy(int) == 0) if "Axis_Filled_Pressure" in df_frames \
+        else np.zeros(len(df_frames), bool)
     frame_no = df_frames["Frame"].to_numpy(int)
     last_of_pass = pd.Series(np.arange(len(df_frames))).groupby(pas).max().to_dict()
     rate = float(df_frames["Sweep_Rate"].iloc[0]) if len(df_frames) else Settings.SWEEP_PX_PER_SEC
@@ -1005,8 +1144,8 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         return out
 
     df_breaths = df_breaths.copy()
-    new_cols = {c: [] for c in ("Wave_T0", "Wave_Rate", "Wave_Points", "Wave_Missing", "Wave_Reread", "Sweep_Start", "Sweep_End", "Wrapped",
-                                "Wave_Trim_Head", "Wave_Trim_Tail", "Start_File_Name", "End_File_Name")}
+    new_cols = {c: [] for c in ("Wave_T0", "Wave_Rate", "Wave_Points", "Wave_Missing", "Wave_Reread", "Wave_Popup", "Sweep_Start", "Sweep_End",
+                                "Wrapped", "Wave_Trim_Head", "Wave_Trim_Tail", "Start_File_Name", "End_File_Name")}
     recs, items = [], []   # 呼吸ごとの Breaths.csv の値 / 波形（区切りを合わせてから書き出す）
     alerts = df_breaths["Alert"].fillna("").astype(str).tolist()
     written = 0
@@ -1025,7 +1164,10 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         p0 = s - 1 if s > 0 else s
         first = int(np.floor(tip_u[p0])) + 1
         last = int(np.floor(tip_u[e]))
-        if last < first or int(b.get("Abnormal", 0)) == 1:
+        # 0.8.0: Abnormal（ポップアップなど）を含む呼吸も読む。ポップアップの間も Hamilton は裏で波形を描き続けているので、
+        # 列を読む画像（その周の最後のフレーム、または呼吸の最後のフレーム）でポップアップが消えていれば読める（B1019 など）。
+        # 読む画像が Abnormal の列は下で飛ばす（空欄）。0.7.4 までは Abnormal を含む呼吸の波形を書き出さなかった
+        if last < first:
             recs.append(rec)
             continue
         if last - first + 1 > max_len:
@@ -1049,27 +1191,53 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         xi = np.clip(np.round(x).astype(int), XL, XR - 1)
 
         vals = {name: np.full(len(u), np.nan) for name in Settings.WAVES}
+        pass_col = np.where(before, pas[kb], pas[kk])
         reread = []
+        popup = []
         ok_any = False
-        for im in np.unique(img):
-            sel = (img == im) & valid
-            if not sel.any() or abn[im]:
-                continue
+
+        def read(im, sel, names=None):
             path = os.path.join(frames_root, f"frame_{int(frame_no[im]):08d}.jpg")
             frame = cv2.imread(path) if os.path.isfile(path) else None
             if frame is None:
-                continue
+                return False
             got = extract_column_values(_normalize_frame(frame), xi[sel], frame_cal(im))
-            for name in Settings.WAVES:
+            for name in names or Settings.WAVES:
                 vals[name][sel] = got[name]
-            ok_any = True
+            return True
+
+        for im in np.unique(img):
+            sel = (img == im) & valid
+            if not sel.any():
+                continue
+            if not abn[im]:
+                ok_any |= read(im, sel)
+                continue
+            # 0.8.0: 読む画像がポップアップの最中なら、ポップアップが消えた直後のフレームから4つの波形を読む（B1014〜B1019 など）。
+            # そのフレームで上書きされていた列は、ポップアップの間も見えている気道内圧の欄から Paw だけを読む
+            g, keep = _after_popup_frame(im, pass_col[sel], xi[sel], pas, pen, abn, wrap,
+                                         int(round(Settings.SWEEP_REREAD_SEC * fps)))
+            later = np.zeros(len(u), bool)
+            if g is not None and keep.any():
+                later[np.flatnonzero(sel)[keep]] = True
+                if read(g, later):
+                    img[later] = g
+                    ok_any = True
+                    popup.append("Reread")
+                else:
+                    later[:] = False
+            rest = sel & ~later
+            if rest.any() and paw_seen[im] and read(im, rest, ["Pressure"]):
+                ok_any = True
+                popup.append("PawOnly")
         if not ok_any:
             recs.append(rec)
             continue
+        if popup:
+            rec["Wave_Popup"] = ",".join(dict.fromkeys(popup))
 
         # 縦軸の範囲を超えた波形は上端・下端で切れて描かれる。その後 Hamilton が縦軸を広げて描き直すので、
         # 列がまだ画面に残っている間に縦軸が広がったフレームがあれば、そこから読み直す（無ければ Alert に Clipped）
-        pass_col = np.where(before, pas[kb], pas[kk])
         for name in Settings.WAVES:
             clipped = _clipped(vals[name], img, valid, name, df_frames)
             # 途中の空欄（2点以上）も、範囲の外へ出て線が読めなかった可能性があるので読み直しの対象にする
@@ -1147,7 +1315,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             f.write("\n[fields]\n")
             read = [k for k in OCR_KEYS if k in df_breaths.columns]
             for name in read + [f"{k}_displayed" for k in read if k in MEASURED_KEYS] + [
-                    "Duration", "Sweep_Start", "Sweep_End", "Wrapped", "Alert"]:
+                    "Trigger", "Duration", "Sweep_Start", "Sweep_End", "Wrapped", "Alert"]:
                 f.write(f"{name}\n")
         meta = {
             "units": {name.lower(): spec["unit"] for name, spec in Settings.WAVES.items()},
