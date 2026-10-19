@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.8.2"
+ENGINE_VERSION = "0.8.3"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -120,7 +120,9 @@ def _normalize_frame(frame):
 
 
 def _to_gray(frame):
-    return np.dot(frame[..., :3], [0.114, 0.587, 0.299]).astype(np.uint8)
+    # 0.8.3: cv2.cvtColor（0.8.2 までは np.dot を画面全体に float64 で計算し、initial_ocr の時間の約 7 割を占めていた。
+    # 四捨五入と切り捨ての違いで画素値が最大 1 違う）
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 def _crop(img, roi):
