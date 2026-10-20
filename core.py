@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.1.0"
+ENGINE_VERSION = "0.2.0"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -481,6 +481,22 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
     return [int(round(t)) for t, _ in out], [uu for _, uu in out]
 
 
+def aux_wave_name(settings):
+    """4 段目の圧の出力の名前（0.2.0）。Hamilton は 4 段目に Pes か Ptranspulm（経肺圧 = Paw − Pes）を表示でき、
+    どちらかは利用者が設定（post_ocr.ptranspulm）で選ぶ（記録の途中で切り替えない前提）。エンジンの中ではどちらも "Pes" として扱い、
+    出力（BreathCSVs の列、Breaths.csv・Frames.csv の Axis_<波形>・<波形>_min/_max、fields.txt、scale_meta.json）の名前だけを変える"""
+    return "Ptranspulm" if settings.get("post_ocr", {}).get("ptranspulm", False) else "Pes"
+
+
+def _rename_aux(df, aux, to_output=True):
+    """4 段目の圧の列の名前を、エンジンの中の名前（Pes）と出力の名前（aux）の間で付け替える。"""
+    if aux == "Pes":
+        return df
+    a, b = ("Pes", aux) if to_output else (aux, "Pes")
+    names = {f"Axis_{a}": f"Axis_{b}", f"Axis_Filled_{a}": f"Axis_Filled_{b}", f"{a}_min": f"{b}_min", f"{a}_max": f"{b}_max"}
+    return df.rename(columns={k: v for k, v in names.items() if k in df.columns})
+
+
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
     呼吸の区切り（数値の表示の更新）を求め、呼吸番号・ペン先の位置を付ける。
@@ -496,7 +512,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     merge = max(1, int(round(Settings.UPDATE_MERGE_SEC * fps)))
     shift = int(round(float(opts.get("boundary_shift_sec", -0.5)) * fps))
 
-    df = df.sort_values("Frame").reset_index(drop=True).copy()
+    aux = aux_wave_name(settings)
+    df = _rename_aux(df, aux, to_output=False).sort_values("Frame").reset_index(drop=True).copy()
     n = len(df)
     keys = [k for k in OCR_KEYS if k in df.columns]   # initial_ocr で読んだ値
     for col in keys:
@@ -675,7 +692,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
 
     print(f"[post_ocr] {len(df)} frames, {len(df_breaths)} breaths ({len(display_updates)} display updates, "
           f"{len(triggers_at)} trigger marks, {len(split_updates)} split by trigger marks)")
-    return df, df_breaths
+    return _rename_aux(df, aux), _rename_aux(df_breaths, aux)
 
 
 # ============================================================
@@ -1141,7 +1158,7 @@ def _after_popup_frame(after, passes, xs, pas, pen, abn, wrap, max_frames):
 def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                   settings={}, overwrite=False, archive_dir=None):
     """
-    呼吸ごとの波形CSV（列: X, Pressure, Flow, Volume, Pes）を output_dir/<BreathNumber>.csv に書き出す。
+    呼吸ごとの波形CSV（列: X, Pressure, Flow, Volume, Pes または Ptranspulm（aux_wave_name））を output_dir/<BreathNumber>.csv に書き出す。
 
     呼吸の開始時のペン先の次の列〜終了時のペン先の列を切り出す。各列は、その列を描いた周の最後のフレーム（呼吸の終わりまで）から読む。
     途中で左端に戻った呼吸は、戻る前の部分と戻った後の部分をつなぐ（画面が消去されて途中から戻った場合も、戻る前の部分は消去の直前のフレームから読む）。
@@ -1154,11 +1171,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     """
     opts = settings.get("post_ocr", {})
     fps = float(opts.get("fps", 10))
+    aux = aux_wave_name(settings)
     os.makedirs(output_dir, exist_ok=True)
     W = Settings.SWEEP_X_RIGHT - Settings.SWEEP_X_LEFT
     max_len = W - 15  # ペン先の前の消去帯と、1周前の波形を含めないための余白
 
-    df_frames = df_frames.reset_index(drop=True)
+    df_frames = _rename_aux(df_frames, aux, to_output=False).reset_index(drop=True)
     XL, XR = Settings.SWEEP_X_LEFT, Settings.SWEEP_X_RIGHT
     tip_u = df_frames["Sweep_U"].to_numpy(float)
     pen = df_frames["Sweep_X"].to_numpy(float)
@@ -1183,7 +1201,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                 out[name] = c[:2]
         return out
 
-    df_breaths = df_breaths.copy()
+    df_breaths = _rename_aux(df_breaths, aux, to_output=False).copy()
     new_cols = {c: [] for c in ("Wave_T0", "Wave_Rate", "Wave_Points", "Wave_Missing", "Wave_Reread", "Wave_Popup", "Sweep_Start", "Sweep_End",
                                 "Wrapped", "Wave_Trim_Head", "Wave_Trim_Tail", "Start_File_Name", "End_File_Name")}
     recs, items = [], []   # 呼吸ごとの Breaths.csv の値 / 波形（区切りを合わせてから書き出す）
@@ -1340,7 +1358,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             # 画面操作などで波形の描画が止まった・画面が消去された区間を含み、波形の3割以上が無い
             alerts[it["k"]] = ",".join(dict.fromkeys(filter(None, alerts[it["k"]].split(",") + ["Partial"])))
         if overwrite or not os.path.exists(it["path"]):
-            wave.drop(columns=["_sx"]).to_csv(it["path"], index=False)
+            wave.drop(columns=["_sx"]).rename(columns={"Pes": aux}).to_csv(it["path"], index=False)
         written += 1
 
     for c in new_cols:
@@ -1352,18 +1370,18 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         with open(os.path.join(archive_dir, "fields.txt"), "w", encoding="utf-8") as f:
             f.write("[waves]\n")
             for name in Settings.WAVES:
-                f.write(f"{name}\n")
+                f.write(f"{aux if name == 'Pes' else name}\n")
             f.write("\n[fields]\n")
             read = [k for k in OCR_KEYS if k in df_breaths.columns]
             for name in read + [f"{k}_displayed" for k in read if k in MEASURED_KEYS] + [
                     "Trigger", "Duration", "Sweep_Start", "Sweep_End", "Wrapped", "Alert"]:
                 f.write(f"{name}\n")
         meta = {
-            "units": {name.lower(): spec["unit"] for name, spec in Settings.WAVES.items()},
-            "symmetric": {name.lower(): spec["axis"][0] == -spec["axis"][1] for name, spec in Settings.WAVES.items()},
+            "units": {(aux if name == "Pes" else name).lower(): spec["unit"] for name, spec in Settings.WAVES.items()},
+            "symmetric": {(aux if name == "Pes" else name).lower(): spec["axis"][0] == -spec["axis"][1] for name, spec in Settings.WAVES.items()},
         }
         with open(os.path.join(archive_dir, "scale_meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
     print(f"[extract_waves] {written} breaths written")
-    return written, df_breaths
+    return written, _rename_aux(df_breaths, aux)

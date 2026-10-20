@@ -1,7 +1,7 @@
 # Hamilton VentOCR Engine
 
 ## Supported Devices
-- Hamilton の人工呼吸器（左に数値、中央に 気道内圧 / フロー / ボリューム / Pes の4波形が並ぶ画面）
+- Hamilton の人工呼吸器（左に数値、中央に 気道内圧 / フロー / ボリューム / Pes または Ptranspulm の4波形が並ぶ画面）
 - 1920x1080 で収録した動画（ほかの解像度は 1920x1080 に縮小・拡大してから読む）
 
 ## Description
@@ -22,7 +22,11 @@
   - 設定値: 換気モード（`Mode`、文字）、呼吸回数（`Set_Rate`）、Δ吸気圧（`Set_Pinsp`）、PEEP/CPAP（`Set_PEEP`）、酸素濃度（`Set_Oxygen`）。
     その呼吸の間に表示されていた値
   - 選ばなかった値の列は出力しない
-- **波形**: Pressure（気道内圧 Paw）、Flow、Volume、Pes（食道内圧）。BreathCSVs/<n>.csv の列は X, Pressure, Flow, Volume, Pes
+- **波形**: Pressure（気道内圧 Paw）、Flow、Volume と、4 段目の圧。BreathCSVs/<n>.csv の列は X, Pressure, Flow, Volume, Pes（または Ptranspulm）
+  - 4 段目は Hamilton の設定で Pes（食道内圧）か Ptranspulm（経肺圧 = Paw − Pes）を表示できる。どちらかは解析の設定
+    `post_ocr.ptranspulm`（既定オフ = Pes）で選ぶ（0.2.0）。オンなら列の名前が Ptranspulm になり、Breaths.csv・Frames.csv の
+    Axis_Ptranspulm・Ptranspulm_min / Ptranspulm_max、fields.txt・scale_meta.json の名前も変わる（値は同じ）。
+    パネルの名前は読まないので、動画ごとに正しく選ぶこと。記録の途中で切り替えた動画には対応しない
   - 掃引は 50 px/秒で左から右へ描き、x=1567 に達すると x=467 に戻って上書きする（1周 22秒、wrap around）
   - 各フレームで前のフレームから変化した列の右端（= ペン先 + 消去帯 3px）を記録し、毎フレームのペン先を追跡する（0.6.0。core.track_sweep）
   - 画面操作などで描画が止まり、画面全体が消去されて途中から左端に戻ることがある。その前の部分は消去の直前のフレームから読む。

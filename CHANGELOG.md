@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.2.0 (2026-10-20)
+### 4 段目の圧（Pes / Ptranspulm）を設定で選ぶ
+- Hamilton は 4 段目に Pes（食道内圧）か Ptranspulm（経肺圧 = Paw − Pes）を表示できるが、0.1.0 までは常に「Pes」として出力していた
+  （Ptranspulm 2026-10-09 の動画の 4 段目は Ptranspulm）
+- 解析の設定に post_ocr.ptranspulm（bool、既定オフ = Pes、解析ダイアログの上に出す）を足した。オンなら出力の名前を Ptranspulm にする:
+  BreathCSVs（waves.sqlite3）の列、Breaths.csv の Axis_Ptranspulm・Ptranspulm_min・Ptranspulm_max、Frames.csv の Axis_Ptranspulm・
+  Axis_Filled_Ptranspulm、fields.txt、scale_meta.json。エンジンの中の処理は名前が違うだけで同じ（core.aux_wave_name）
+- パネルの名前の自動判定はしない（ユーザーの判断）。記録の途中で切り替えた動画には対応しない
+- 確認（Ptranspulm 2026-10-09 の 600〜720 秒、python -m ventocr_core）: 0.1.0 と 0.2.0（オフ）は Breaths.csv（作業フォルダのパスの列を除く）・
+  Frames.csv・波形 34 呼吸・fields.txt・scale_meta.json が同一。オンはオフと値が同じで、名前だけが Ptranspulm
+- 版を 0.2.0 にした理由: オンにすると出力の列の名前が変わり、0.1.0 以前の結果（同じ動画でも Pes の名前）と列の名前の整合が取れなくなるため。
+  アプリ（チャート・書き出し）が Ptranspulm の列に対応するまでは、オンにした解析の 4 段目はチャートに出ない
+
 ## 0.1.0 (2026-10-19)
 - 0.1.0（旧 v0.8.3 と中身は同じ。版の付け方を 0.X.Y に改めた）
 

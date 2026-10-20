@@ -47,6 +47,12 @@ ENGINE_SETTINGS_SCHEMA = {
             "type": "bool",
             "default": True,
             "label": "波形の区切りを吸気の始まりに合わせる"
+        },
+        "ptranspulm": {
+            "type": "bool",
+            "primary": True,          # 解析ダイアログの上に出す（動画ごとに確かめる項目）
+            "default": False,
+            "label": "4段目の波形は Ptranspulm（経肺圧）。オフなら Pes（食道内圧）。記録の途中で切り替えないこと"
         }
     }
 }
