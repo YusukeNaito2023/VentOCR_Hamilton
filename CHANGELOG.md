@@ -10,6 +10,12 @@
 - パネルの名前の自動判定はしない（ユーザーの判断）。記録の途中で切り替えた動画には対応しない
 - 確認（Ptranspulm 2026-10-09 の 600〜720 秒、python -m ventocr_core）: 0.1.0 と 0.2.0（オフ）は Breaths.csv（作業フォルダのパスの列を除く）・
   Frames.csv・波形 34 呼吸・fields.txt・scale_meta.json が同一。オンはオフと値が同じで、名前だけが Ptranspulm
+### 出力の宣言（manifest.json の outputs。ENGINE_API.md §8.1、VentOCR 0.6.2 から）
+- outputs.waves に Pressure（表示名 Paw）・Flow・Volume・Pes・Ptranspulm を宣言（単位・色・縦軸は Breaths.csv の <頭>_min / <頭>_max）。
+  Pes と Ptranspulm は設定でどちらか一方だけが出るが、両方を宣言する（アプリは波形の CSV にある方だけを出す）。色はどちらも Pes の茶色（#8c564b）
+- outputs.breath_values に、呼吸プロパティのサマリーの列（breath_summary と同じ順。labels と単位、数の書き方）を宣言
+- ventocr_min を 0.5.5 → 0.6.2（outputs を読み、ventocr_min を確かめるアプリ。古いアプリには入らない）
+- breath_summary・labels は、outputs を読まないアプリのために残した
 - 版を 0.2.0 にした理由: オンにすると出力の列の名前が変わり、0.1.0 以前の結果（同じ動画でも Pes の名前）と列の名前の整合が取れなくなるため。
   アプリ（チャート・書き出し）が Ptranspulm の列に対応するまでは、オンにした解析の 4 段目はチャートに出ない
 
