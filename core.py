@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.2"
+ENGINE_VERSION = "0.2.3"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -451,6 +451,27 @@ def track_sweep(sweep_raw, sweep_run, fps, abnormal=None):
     return {"pen": pen, "u": u, "pass_": pass_, "wrap": wrap, "detected": np.isfinite(acc), "speed": speed}
 
 
+def _clear_events(pass_, wrap, detected, sweep_run, fps):
+    """途中で画面が消去されて左端に戻ったとき（wrap = 2）の (ペン先を最後に見つけたフレーム, 消去されたフレーム, 左端に戻ったと分かったフレーム)
+    のリスト（行番号。0.2.3）。
+
+    戻ったと分かるのは左端でペン先を見つけたときなので、その前の数フレームは同じ周のまま、画面はもう消えている
+    （Ptranspulm 2026-10-09 の B541: 17392 までペン先を見つけ、17393 で消去、17395 で左端に戻ったと分かった）。
+    消去されたフレーム = 戻る前の周でペン先を最後に見つけたフレームより後で、画面全体が変わった（変化した列のまとまりが
+    描き直しの幅を超えた）最初のフレーム。描画が止まってから消去されるまで間があることもある（B989〜991: 30069 で止まり 30120 で消去）。
+    見つからなければ、ペン先を最後に見つけたフレームの次"""
+    pass_, wrap, detected = (np.asarray(a) for a in (pass_, wrap, detected))
+    run = np.asarray(sweep_run, float) if sweep_run is not None else np.full(len(pass_), np.nan)
+    big = run > max(Settings.SWEEP_RUN_MAX, 3 * Settings.SWEEP_PX_PER_SEC / fps)
+    out = []
+    for i in np.flatnonzero(wrap == 2):
+        seen = np.flatnonzero((pass_[:i] == pass_[i - 1]) & detected[:i].astype(bool))
+        last = int(seen[-1]) if len(seen) else i - 1
+        jumps = last + 1 + np.flatnonzero(big[last + 1:i + 1])
+        out.append((last, int(jumps[0]) if len(jumps) else last + 1, int(i)))
+    return out
+
+
 # ============================================================
 # post_ocr
 # ============================================================
@@ -612,6 +633,9 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df["Sweep_Wrap"] = sw["wrap"]
     df["Sweep_Detected"] = sw["detected"].astype(int)
     df["Sweep_Rate"] = round(sw["speed"] * fps, 4)  # px/秒
+    cleared = np.zeros(n, bool)   # 画面が消去されてから、左端に戻ったと分かるまで
+    for _, j, i in _clear_events(sw["pass_"], sw["wrap"], sw["detected"], df["Sweep_Run"] if "Sweep_Run" in df else None, fps):
+        cleared[j:i + 1] = True
     print(f"[post_ocr] sweep {sw['speed'] * fps:.2f} px/s, detected {sw['detected'].mean() * 100:.1f}% of frames, "
           f"{int((sw['wrap'] == 1).sum())} wraps, {int((sw['wrap'] == 2).sum())} restarts")
 
@@ -739,6 +763,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             alerts.append("Fragment")   # 録画の終わりで切れている呼吸
         if g["Abnormal"].any():
             alerts.append("Abnormal")
+        if cleared[s:e + 1].any():
+            alerts.append("Cleared")   # 0.2.3: この呼吸の間に呼吸器の画面（波形）が消去された
         row["Abnormal"] = int(g["Abnormal"].any())
         # 縦軸の換算式 = 波形を切り出す最後のフレームのもの。
         # 0.8.1: P_min / P_max などは描画領域の下端・上端の値（呼吸器の画面に見える範囲）。0.8.0 までは目盛りの最小・最大の数字で、
@@ -1257,6 +1283,14 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         else np.zeros(len(df_frames), bool)
     frame_no = df_frames["Frame"].to_numpy(int)
     last_of_pass = pd.Series(np.arange(len(df_frames))).groupby(pas).max().to_dict()
+    # 0.2.3: 途中で画面が消去されて戻った周は、消去される直前のフレームから読む。
+    # 0.2.2 までは周の最後のフレーム（もう消去された画面）を読み、消去の前に描かれていた部分も空欄になっていた
+    detected = df_frames["Sweep_Detected"].to_numpy(int) if "Sweep_Detected" in df_frames else np.ones(len(df_frames), int)
+    capped = {}   # 読むフレームを消去の前にした周 → (そのフレーム, ペン先を最後に見つけたフレーム)
+    for last, j, i in _clear_events(pas, wrap, detected, df_frames["Sweep_Run"] if "Sweep_Run" in df_frames else None, fps):
+        if j - 1 >= 0 and pas[j - 1] == pas[i - 1]:
+            last_of_pass[pas[i - 1]] = j - 1
+            capped[int(pas[i - 1])] = (j - 1, last)
     rate = float(df_frames["Sweep_Rate"].iloc[0]) if len(df_frames) else Settings.SWEEP_PX_PER_SEC
     times = frame_no / fps
     pos_of_frame = {int(f): i for i, f in enumerate(frame_no)}
@@ -1275,6 +1309,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                                 "Wrapped", "Wave_Trim_Head", "Wave_Trim_Tail", "Start_File_Name", "End_File_Name")}
     recs, items = [], []   # 呼吸ごとの Breaths.csv の値 / 波形（区切りを合わせてから書き出す）
     alerts = df_breaths["Alert"].fillna("").astype(str).tolist()
+    triggers = df_breaths["Trigger"].fillna("").astype(str).tolist() if "Trigger" in df_breaths else None
     written = 0
 
     for k, b in df_breaths.iterrows():
@@ -1315,13 +1350,21 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         # 途中で消去されて戻った場合、戻る前のペン先より先の列は描かれていない
         valid = ~before | (wrap[kk] == 1) | (xb <= pen[kb] + 0.5)
         valid &= (x >= XL - 0.5) & (x <= XR - 0.5)
+        # 消去の直前のフレームから読む列のうち、ペン先を最後に見つけた位置より右は空欄（まだ描かれていない。画面には1周前の波形が残っている。
+        # ペン先を見つけられなかったフレームのペン先は速さで進めた推定なので使わない。B1238）。0.2.2 まではもう消去された画面から読んで空欄
+        blank = np.zeros(len(u), bool)
+        if capped:
+            pc = np.where(before, pas[kb], pas[kk])
+            for q, (cf, seen) in capped.items():
+                blank |= (pc == q) & (img == cf) & (x > pen[seen] + 0.5) & valid
+            valid &= ~blank
         xi = np.clip(np.round(x).astype(int), XL, XR - 1)
 
         vals = {name: np.full(len(u), np.nan) for name in Settings.WAVES}
         pass_col = np.where(before, pas[kb], pas[kk])
         reread = []
         popup = []
-        ok_any = False
+        ok_any = bool(blank.any())
 
         def read(im, sel, names=None):
             path = os.path.join(frames_root, f"frame_{int(frame_no[im]):08d}.jpg")
@@ -1377,6 +1420,14 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                     if b2 - a2 + 1 >= 2:
                         gaps[a2:b2 + 1] = True
             target = clipped | gaps
+            lost = np.zeros(len(u), bool)
+            if capped:
+                # 0.2.3: 画面が消去された周の列は、縦軸が広がっても画面に残っていないので読み直さない（切れていれば Clipped）。
+                # 読み直しの対象に入れると、ほかの周の列の読み直しもできなくなる（B244）
+                lost = target & np.isin(pass_col, list(capped))
+                target &= ~lost
+                if (clipped & lost).any():
+                    alerts[k] = ",".join(dict.fromkeys(filter(None, alerts[k].split(",") + ["Clipped"])))
             if not target.any():
                 continue
             g = _wider_axis_frame(name, img[target].max(), pass_col[target], xi[target],
@@ -1426,6 +1477,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         if rec["Wave_Missing"] > 0.3:
             # 画面操作などで波形の描画が止まった・画面が消去された区間を含み、波形の3割以上が無い
             alerts[it["k"]] = ",".join(dict.fromkeys(filter(None, alerts[it["k"]].split(",") + ["Partial"])))
+        if triggers is not None and triggers[it["k"]] == "C" and "Cleared" in alerts[it["k"]].split(","):
+            # 0.2.3: 画面が消去された呼吸で、波形の描かれていない区間（描画が止まった・消去された）があれば、
+            # その間に吸気が始まって三角が描かれなかったかもしれないので、C ではなく空欄（わからない）
+            gaps = _runs(wave["Pressure"].isna().to_numpy())
+            if gaps and max(b - a + 1 for a, b in gaps) >= Settings.CLEARED_GAP_SEC * it["rate"]:
+                triggers[it["k"]] = ""
         if overwrite or not os.path.exists(it["path"]):
             wave.drop(columns=["_sx"]).rename(columns={"Pes": aux}).to_csv(it["path"], index=False)
         written += 1
@@ -1433,6 +1490,8 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     for c in new_cols:
         df_breaths[c] = [r[c] for r in recs]
     df_breaths["Alert"] = alerts
+    if triggers is not None:
+        df_breaths["Trigger"] = triggers
 
     if archive_dir is not None:
         os.makedirs(archive_dir, exist_ok=True)
