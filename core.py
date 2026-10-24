@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.0"
+ENGINE_VERSION = "0.2.1"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -150,12 +150,32 @@ def _format_time(frame, fps):
 # OCR結果パース
 # ============================================================
 
-def _parse_ocr(result, key):
+def _has_dot(roi):
+    """ROI（グレー）に小数点があるか: 数字の下端の近くにある小さな塊を探す。数字が見つからなければ None。
+
+    文字は白（≈255）か赤（グレーで ≈76）、背景は黒なので、しきい値 40 で二値化する。
+    """
+    _, bw = cv2.threshold(np.asarray(roi, np.uint8), 40, 255, cv2.THRESH_BINARY)
+    n, _, st, _ = cv2.connectedComponentsWithStats(bw, connectivity=8)
+    st = st[1:]
+    big = st[st[:, cv2.CC_STAT_HEIGHT] >= 0.4 * bw.shape[0]]     # 数字（ROI の高さの 4 割以上）
+    if len(big) == 0:
+        return None
+    bottom = (big[:, 1] + big[:, 3]).max()
+    h = bottom - big[:, 1].min()          # 数字の高さ（1080p で約 80 px、小数点は約 14 px 角）
+    for x, y, w, hh, a in st:
+        if 0.08 * h <= w < 0.3 * h and 0.08 * h <= hh < 0.3 * h and y + hh >= bottom - 0.15 * h:
+            return True
+    return False
+
+
+def _parse_ocr(result, key, roi=None):
     """EasyOCR の結果 → (値の文字列, 生の文字列, 信頼度の文字列)。
 
     読み方は Settings.OCR_FIELDS の type: int = 整数、text = 文字（換気モード）、
     dec1 = 小数1桁で表示されるが小数点を読み落とすことがあるので、小数点が無い dot_min_digits 桁以上の数字は
     最後の1桁の前に小数点を補う（生の文字列は *_raw に残す）。P0.1 は負の値（-）も読む。
+    dot_check のある値は、補う前に ROI の画素で小数点を確かめ、無ければ整数として扱う（roi を渡したときだけ）。
     """
     field = Settings.OCR_FIELDS[key]
     texts = [t for _, t, _ in result]
@@ -173,7 +193,10 @@ def _parse_ocr(result, key):
     if field["type"] == "int":
         value = digits.split(".")[0]
     elif "." not in digits and len(digits) >= field.get("dot_min_digits", 3):
-        value = digits[:-1] + "." + digits[-1]
+        if field.get("dot_check") and roi is not None and not _has_dot(roi):
+            value = digits
+        else:
+            value = digits[:-1] + "." + digits[-1]
     else:
         value = digits.rstrip(".")
     return sign + value, raw, conf
@@ -227,7 +250,7 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                 if prev is None or np.abs(roi - prev).mean() > diff_thresh:
                     try:
                         result = reader.readtext(roi.astype(np.uint8), allowlist=field.get("allow", Settings.DIGITS))
-                        last_val[key] = _parse_ocr(result, key)
+                        last_val[key] = _parse_ocr(result, key, roi)
                     except Exception:
                         last_val[key] = ("", "", "0.00")
                     last_roi[key] = roi

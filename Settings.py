@@ -11,6 +11,9 @@ BASE_RESOLUTION = (1920, 1080)  # (width, height)
 #         "setting"  = 換気モード・右の丸の設定値。その呼吸の間に表示されていた値
 # type:   "int" = 整数、"dec1" = 小数1桁（小数点を読み落としたら dot_min_digits 桁以上のとき最後の1桁の前に補う）、
 #         "text" = 文字（換気モード）
+# dot_check: dec1 で小数点の無い dot_min_digits 桁以上を読んだとき、補う前に ROI の画素で小数点を確かめる。
+#         小数点が無ければ整数として扱う（0.2.1。コンプライアンスは 100 以上を「126」のように小数点無しの整数で表示し、
+#         100 未満は「89.0」のように必ず小数1桁。0.2.0 までは 126 を 12.6 にしていた）
 # 右の丸の設定値は、単位（cmH2O の「2」）を読まないよう数字の部分だけを囲む。
 # VTE は左端を x=110 まで広げる（0.7.2。1000 mL 以上で4桁になると先頭の「1」が x≈140 に出る。
 # アラーム上下限の数字（700 / 250 など）は x≈80 まで）。ほかの値も広げると、コンプライアンスの読み取りがわずかに悪くなったので広げない
@@ -21,7 +24,7 @@ OCR_FIELDS = {
     "VTE":        {"roi": (110, 435, 275, 100), "kind": "measured", "type": "int", "unit": "mL",
                    "label": "呼気VT（換気量）"},
     "Compliance": {"roi": (160, 605, 230, 100), "kind": "measured", "type": "dec1", "dot_min_digits": 3,
-                   "unit": "mL/cmH2O", "label": "コンプライアンス"},
+                   "dot_check": True, "unit": "mL/cmH2O", "label": "コンプライアンス"},
     "Ppeak":      {"roi": (185, 95, 200, 100), "kind": "measured", "type": "int", "unit": "cmH2O",
                    "label": "ピーク圧"},
     "MinVol":     {"roi": (160, 265, 230, 100), "kind": "measured", "type": "dec1", "dot_min_digits": 2,
