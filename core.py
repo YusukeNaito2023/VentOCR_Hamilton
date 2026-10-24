@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.1"
+ENGINE_VERSION = "0.2.2"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -150,23 +150,65 @@ def _format_time(frame, fps):
 # OCR結果パース
 # ============================================================
 
-def _has_dot(roi):
-    """ROI（グレー）に小数点があるか: 数字の下端の近くにある小さな塊を探す。数字が見つからなければ None。
+def _load_value_glyphs():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), Settings.VALUE_GLYPH_FILE)
+    z = np.load(path)
+    return z["templates"], z["widths"], [str(c) for c in z["chars"]]
 
-    文字は白（≈255）か赤（グレーで ≈76）、背景は黒なので、しきい値 40 で二値化する。
-    """
-    _, bw = cv2.threshold(np.asarray(roi, np.uint8), 40, 255, cv2.THRESH_BINARY)
-    n, _, st, _ = cv2.connectedComponentsWithStats(bw, connectivity=8)
+
+_VALUE_TEMPLATES, _VALUE_WIDTHS, _VALUE_CHARS = _load_value_glyphs()
+
+
+def _value_blobs(roi):
+    """測定値の ROI（グレー）→ (ラベル画像, 塊の統計 [x, y, w, h, 面積]（背景を除く）, 数字の塊の番号（左から）, 小数点の塊の番号 or None)。
+    数字が見つからなければ数字の番号は空。文字は白（≈255）か赤（グレーで ≈76）、背景は黒。"""
+    _, bw = cv2.threshold(np.asarray(roi, np.uint8), Settings.VALUE_BIN_THRESH, 255, cv2.THRESH_BINARY)
+    _, lab, st, _ = cv2.connectedComponentsWithStats(bw, connectivity=8)
     st = st[1:]
-    big = st[st[:, cv2.CC_STAT_HEIGHT] >= 0.4 * bw.shape[0]]     # 数字（ROI の高さの 4 割以上）
-    if len(big) == 0:
-        return None
+    digits = sorted(np.flatnonzero(st[:, cv2.CC_STAT_HEIGHT] >= 0.4 * bw.shape[0]), key=lambda i: st[i, 0])  # ROI の高さの 4 割以上
+    if not digits:
+        return lab, st, [], None
+    big = st[digits]
     bottom = (big[:, 1] + big[:, 3]).max()
     h = bottom - big[:, 1].min()          # 数字の高さ（1080p で約 80 px、小数点は約 14 px 角）
-    for x, y, w, hh, a in st:
+    for i, (x, y, w, hh, a) in enumerate(st):
         if 0.08 * h <= w < 0.3 * h and 0.08 * h <= hh < 0.3 * h and y + hh >= bottom - 0.15 * h:
-            return True
-    return False
+            return lab, st, digits, i
+    return lab, st, digits, None
+
+
+def _has_dot(roi):
+    """ROI（グレー）に小数点があるか: 数字の下端の近くにある小さな塊を探す。数字が見つからなければ None。"""
+    _, _, digits, dot = _value_blobs(roi)
+    return None if not digits else dot is not None
+
+
+def _read_glyphs(roi):
+    """測定値の ROI（グレー）の数字を1つずつ見本と照合して読む → 値の文字列（"41.2"・"126" など）。
+    見本との相関が VALUE_MATCH_MIN 未満の数字がある、小数点が最後の2つの数字の間に無い、などのときは None（EasyOCR の値を使う）。"""
+    lab, st, digits, dot = _value_blobs(roi)
+    if not digits:
+        return None
+    text = ""
+    for i in digits:
+        x, y, w, h, _ = st[i]
+        v = cv2.resize((lab[y:y + h, x:x + w] == i + 1).astype(np.float32), (_VALUE_TEMPLATES.shape[2], _VALUE_TEMPLATES.shape[1]),
+                       interpolation=cv2.INTER_AREA)
+        v -= v.mean()
+        n = np.linalg.norm(v)
+        if not n:
+            return None
+        score = (_VALUE_TEMPLATES * (v / n)).sum(axis=(1, 2))
+        score[np.abs(_VALUE_WIDTHS - w) > Settings.VALUE_WIDTH_TOL] = -1
+        k = int(np.argmax(score))
+        if score[k] < Settings.VALUE_MATCH_MIN:
+            return None
+        text += _VALUE_CHARS[k]
+    if dot is not None:
+        if len(digits) < 2 or not (st[digits[-2], 0] + st[digits[-2], 2] <= st[dot, 0] and st[dot, 0] + st[dot, 2] <= st[digits[-1], 0]):
+            return None
+        text = text[:-1] + "." + text[-1]
+    return text
 
 
 def _parse_ocr(result, key, roi=None):
@@ -187,7 +229,7 @@ def _parse_ocr(result, key, roi=None):
         return value, raw, conf
     joined = "".join(texts)
     sign = "-" if "-" in field.get("allow", "") and joined.strip().startswith("-") else ""
-    digits = re.sub(r"[^0-9.]", "", joined)
+    digits = re.sub(r"\.{2,}", ".", re.sub(r"[^0-9.]", "", joined))   # 0.2.2: 「47..4」（点を二重に読む）→ 47.4
     if not re.fullmatch(r"\d+\.?\d*", digits or ""):
         return "", raw, conf
     if field["type"] == "int":
@@ -253,6 +295,10 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                         last_val[key] = _parse_ocr(result, key, roi)
                     except Exception:
                         last_val[key] = ("", "", "0.00")
+                    if field.get("glyph_read"):
+                        g = _read_glyphs(roi)
+                        if g is not None:
+                            last_val[key] = (g,) + last_val[key][1:]   # *_raw・*_conf は EasyOCR のまま
                     last_roi[key] = roi
                     row["OCR_Done"] = 1
                 value, raw, conf = last_val[key]
