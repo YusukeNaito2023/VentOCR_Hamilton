@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## 0.2.4 (2026-10-25)
+### 設定のダイアログが波形の欄を覆った呼吸（Alert に Popup）
+- 換気モードの設定などのダイアログは、波形の欄を覆っても縦軸の目盛りを隠さないことがあり、Abnormal にならなかった
+  （Ptranspulm 2026-10-09 の B989〜991: フレーム 30050〜30119 に換気モードの設定 PCV+ → SPONT。その間ペン先はダイアログの下で、
+  三角も見えず、B990 は自発なのに C になっていた。Study Recorder では Paw・Flow とも欠けなく記録されていた）
+- initial_ocr で、波形の欄（x 467〜1567、y 95〜1000）の 8 px おきの画素のうち明るい（グレー 180 より上）ものの割合を
+  Frames.csv の Wave_Covered に記録する（1 フレームあたりの手間はほぼ 0）。POPUP_COVER_MIN（0.1）以上のフレームを含む呼吸は Alert に Popup、
+  三角が無ければ Trigger を空欄（わからない）にする。実測: ふだん 0.02 以下、ダイアログ 0.3〜0.8
+- manifest.json の outputs.alerts に Alert の値の一覧と、読み取りの精度の評価で除く値（exclude_from_accuracy）を宣言した
+  （ENGINE_API.md §8.1。除く: Fragment・Abnormal・Popup・Clipped・Partial。除かない: TriggerSplit・Axis?・Long・Cleared）
+- 確認（Ptranspulm 2026-10-09 10-25-03.mov の 1 時間、python -m ventocr_core・並列数 5、0.2.3 と比べた）:
+  - 呼吸の数（1260）・区切り・波形・数値は同じ
+  - Alert に Popup: B988〜991・B1014〜1020・B1030〜1031（13 呼吸。B990・B991 のほかは Abnormal でもあった）
+  - Trigger C → 空欄: B990（Study Recorder では自発）
+  - 解析時間: 450.3 秒（0.2.3 は 476.3 秒）
+
 ## 0.2.3 (2026-10-24)
 ### 呼吸の途中で呼吸器の画面（波形）が消去されたとき
 - Hamilton は、測定値を出さない間（Ptranspulm 2026-10-09 の B541 では約 1.5 秒。Study Recorder でも Paw 0・Flow なし）のあと、

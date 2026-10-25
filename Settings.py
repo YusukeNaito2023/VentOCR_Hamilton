@@ -69,6 +69,13 @@ AXIS_FIT_TOL_PX = 2.0         # 目盛りの位置が直線からこれ（px）�
 AXIS_MIN_PANELS = 3           # 目盛りが読めた波形がこれ未満のフレームは Abnormal（ポップアップ・別の画面）。
                               # 1つだけ読めない（見本に無い「9」など）ときは、その波形は直前に読めた目盛りを引き継ぐ
 
+# 設定のダイアログ（換気モードの設定など）が波形の欄を覆っているか（0.2.4。Frames.csv の Wave_Covered、Alert に Popup）。
+# 縦軸の目盛りを隠さないダイアログは Abnormal にならない（Ptranspulm 2026-10-09 の B989〜991: 換気モードの設定 PCV+ → SPONT）
+POPUP_AREA = (467, 95, 1567, 1000)   # 波形の欄 (x0, y0, x1, y1)
+POPUP_GRID = 8                # この間隔（px）の格子の画素で測る
+POPUP_BRIGHT = 180            # これより明るい画素をダイアログとする（グレー）
+POPUP_COVER_MIN = 0.1         # 明るい画素の割合がこれ以上のフレームは、波形の欄がダイアログで覆われている（実測: ふだん 0.02 以下、ダイアログ 0.3〜0.8）
+
 # 左の測定値の大きな数字を見本と照合して読む（OCR_FIELDS の glyph_read）
 VALUE_GLYPH_FILE = "value_glyphs.npz"  # 数字の見本（高さ約 80 px。Ptranspulm 2026-10-09 の動画のコンプライアンスの表示から作った）
 VALUE_BIN_THRESH = 40         # 数字は黒地に白（≈255）か赤（グレーで ≈76）

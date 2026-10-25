@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.3"
+ENGINE_VERSION = "0.2.4"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -320,6 +320,10 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 
             # --- 患者トリガーの三角（▲）の頂点の x（";" 区切り）。新しく描かれたものかは post_ocr でペン先の位置から判断する ---
             row["Trigger_Apexes"] = ";".join(f"{x:.1f}" for x in trigger_apexes(frame))
+
+            # --- 波形の欄を覆う明るい画素の割合（0.2.4。設定のダイアログなど。波形の欄は黒地に細い線で、ふだんは 0.02 以下） ---
+            (px0, py0, px1, py1), st = Settings.POPUP_AREA, Settings.POPUP_GRID
+            row["Wave_Covered"] = round(float((gray[py0:py1:st, px0:px1:st] > Settings.POPUP_BRIGHT).mean()), 3)
 
             # --- 縦軸の目盛り（数字の列が変わったときだけ読む）。Axis_OK = 目盛りが読めた波形の数 ---
             axis_img = gray[:, ax_x0:ax_x1].astype(np.int16)
@@ -749,10 +753,12 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
                 row[key] = _mode(normal[key])
         # 患者トリガー: この呼吸の間に新しい三角が描かれたら A（自発）、無ければ C（強制）。
         # 気道内圧の欄が見えないフレームを含む呼吸で三角が無いときは、隠れていたかもしれないので空欄
+        # 0.2.4: 設定のダイアログが波形の欄を覆っていたフレームを含む呼吸も、三角が隠れていたかもしれないので空欄
+        covered = bool((g["Wave_Covered"] >= Settings.POPUP_COVER_MIN).any()) if "Wave_Covered" in g else False
         if g["Trigger_New"].any():
             row["Trigger"] = "A"
         else:
-            row["Trigger"] = "" if g["Paw_Hidden"].any() else "C"
+            row["Trigger"] = "" if g["Paw_Hidden"].any() or covered else "C"
         alerts = []
         u0 = start_update.get(s)
         if u0 is not None and u0 in split_updates:
@@ -765,6 +771,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             alerts.append("Abnormal")
         if cleared[s:e + 1].any():
             alerts.append("Cleared")   # 0.2.3: この呼吸の間に呼吸器の画面（波形）が消去された
+        if covered:
+            alerts.append("Popup")     # 0.2.4: 設定のダイアログなどが波形の欄を覆っていた（精度の評価では除く）
         row["Abnormal"] = int(g["Abnormal"].any())
         # 縦軸の換算式 = 波形を切り出す最後のフレームのもの。
         # 0.8.1: P_min / P_max などは描画領域の下端・上端の値（呼吸器の画面に見える範囲）。0.8.0 までは目盛りの最小・最大の数字で、
