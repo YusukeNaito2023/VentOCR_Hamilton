@@ -68,6 +68,7 @@ AXIS_BIN_THRESH = 150         # digits are white on black. Pixels brighter than 
 AXIS_TEXT_HEIGHT = (10, 16)   # character height of one row (measured 12-14 px)
 AXIS_MATCH_MIN = 0.85         # characters whose correlation with the templates is below this are unreadable
 AXIS_FIT_TOL_PX = 2.0         # if a tick position deviates from the line by this (px) or more, that waveform is unreadable
+AXIS_RETRY_FRAMES = 10        # after a read that missed a waveform's labels, re-read this many following frames (0.2.5)
 AXIS_MIN_PANELS = 3           # frames with fewer waveforms with readable ticks than this are Abnormal (popup, another screen).
                               # when only one is unreadable (e.g. "9", not in the templates), that waveform inherits the last readable ticks
 
@@ -132,6 +133,8 @@ TRIGGER_NEW_LAG_PX = (-5, 40)
 TRIGGER_DEDUP_SEC = 0.3       # two triangles closer than this are the same one
 TRIGGER_KEEP_PX = 8           # a triangle redrawn at the same position as one from the previous pass must still remain after the pen tip has advanced this far
 TRIGGER_KEEP_SEC = 0.5        # time (s) checked for that (5 frames up to 0.8.1)
+TRIGGER_X_MARGIN = 15         # search triangles in x [SWEEP_X_LEFT - this, SWEEP_X_RIGHT + this) (0.2.5)
+TRIGGER_WRAP_PX = 50          # a triangle at the left edge within this distance across the wrap from the pen at the right edge is from the previous pass (0.2.5)
 
 # Additional segmentation by triangles (0.8.0): display updates occur 0.14-0.39 s after the triangle (median 0.27 s).
 # If consecutive breaths happen to have the same VTE / Compliance, the display does not change and no boundary is found (Ptranspulm 2026-10-09, B87), so

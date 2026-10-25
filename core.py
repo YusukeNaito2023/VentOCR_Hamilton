@@ -271,6 +271,7 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 
     ax_x0, ax_x1 = Settings.AXIS_LABEL_X
     last_axis_img, last_axis = None, None
+    axis_retry = 0   # frames left to re-read after a read that missed a waveform's labels (0.2.5)
     y0, y1 = Settings.SWEEP_DIFF_ROWS
     x_lo, x_hi = Settings.SWEEP_X_LEFT, Settings.SWEEP_X_RIGHT
 
@@ -328,10 +329,20 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 
             # --- vertical-axis ticks (read only when the number column changed). Axis_OK = number of waveforms with readable ticks ---
             axis_img = gray[:, ax_x0:ax_x1].astype(np.int16)
-            if last_axis_img is None or np.abs(axis_img - last_axis_img).mean() > 1.0:
+            # 0.2.5: after a read that missed a waveform's labels (e.g. read mid-change), also re-read the next AXIS_RETRY_FRAMES frames;
+            # otherwise the failure stayed until the label column changed again (Ptranspulm 2026-10-09, B829-B832 with undecoded frames:
+            # 9.5 s on the old scale). Limited so a screen that never shows all labels does not re-read every frame
+            if last_axis_img is None or axis_retry > 0 or np.abs(axis_img - last_axis_img).mean() > 1.0:
+                changed = last_axis_img is None or np.abs(axis_img - last_axis_img).mean() > 1.0
                 axis = axis_scale.read_axis(gray)
                 last_axis = (axis_scale.encode(axis), sum(v is not None for v in axis.values()))
                 last_axis_img = axis_img
+                if last_axis[1] >= len(Settings.AXIS_PANELS):
+                    axis_retry = 0
+                elif changed:
+                    axis_retry = Settings.AXIS_RETRY_FRAMES
+                else:
+                    axis_retry -= 1
             row.update(last_axis[0])
             row["Axis_OK"] = last_axis[1]
 
@@ -551,7 +562,8 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
         for j in range(i + 1, min(i + 1 + keep_frames, n)):
             if hidden[j] or not np.isfinite(pen[j]):
                 return False
-            if pen[j] - x >= Settings.TRIGGER_KEEP_PX:
+            ahead = pen[j] - x if pen[j] - x > -half_w else pen[j] - x + width   # 0.2.5: wrap-aware
+            if ahead >= Settings.TRIGGER_KEEP_PX:
                 return any(abs(x - q) <= Settings.TRIGGER_SAME_PX for q in xs[j])
         return False
 
@@ -577,7 +589,9 @@ def trigger_events(apexes, pen, hidden, speed, fps, sweep_u=None):
                 # a new triangle may be drawn at almost the same position as one from the previous pass (Ptranspulm 2026-10-09, B237, B452).
                 # if it was right of the pen tip (previous pass) in the previous frame and still remains after the pen tip passed, it was redrawn
                 # (columns the pen tip passes are erased, so a triangle from the previous pass disappears)
-                if not (all(q > pen[i - 1] for q in same) and stays(i, x)):
+                # 0.2.5: also from the previous pass when the pen is at the right edge and the triangle at the left edge (within
+                # TRIGGER_WRAP_PX across the wrap). Ptranspulm 2026-10-09, B417: redrawn at x 472 while the pen was at x 1562
+                if not (all(q > pen[i - 1] or pen[i - 1] - q > width - Settings.TRIGGER_WRAP_PX for q in same) and stays(i, x)):
                     continue
             found.append((max(i - max(lag, 0) / speed, 0.0), sweep_u[i] - lag if sweep_u is not None else np.nan))
     out = []
@@ -772,19 +786,20 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         else:
             row["Trigger"] = "" if g["Paw_Hidden"].any() or covered else "C"
         alerts = []
-        u0 = start_update.get(s)
-        if u0 is not None and u0 in split_updates:
-            alerts.append("TriggerSplit")   # breath segmented by a triangle because the display did not change
+        # 0.2.5 (A61): splitting by a triangle without a display update is part of the algorithm, not an alert (no TriggerSplit any more;
+        # Frames.csv Trigger_Split still marks the position)
         if k == 0 and (not bounds or bounds[0] > 0):
             alerts.append("Fragment")   # breath starting mid-recording
         if nxt is None:
             alerts.append("Fragment")   # breath cut off at the end of the recording
+        # 0.2.5 (A61): Abnormal (axis labels unreadable: popup or another screen) and the settings-dialog check (Wave_Covered) are both
+        # reported as one alert, Hidden; the two checks are unchanged (the Abnormal column is kept)
         if g["Abnormal"].any():
-            alerts.append("Abnormal")
+            alerts.append("Hidden")
         if cleared[s:e + 1].any():
             alerts.append("Cleared")   # 0.2.3: the ventilator screen (waveforms) was cleared during this breath
         if covered:
-            alerts.append("Popup")     # 0.2.4: a settings dialog etc. covered the waveform area (excluded from accuracy evaluation)
+            alerts.append("Hidden")    # 0.2.4: a settings dialog etc. covered the waveform area (excluded from accuracy evaluation)
         row["Abnormal"] = int(g["Abnormal"].any())
         # axis conversion = that of the last frame from which the waveform is cut.
         # 0.8.1: P_min / P_max etc. are the values at the bottom/top of the drawing area (the range visible on the ventilator screen). Up to 0.8.0 they were the min/max tick numbers,
@@ -799,7 +814,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             row[f"{spec['scale_prefix']}_min"], row[f"{spec['scale_prefix']}_max"] = round(a * bottom + b, 2), round(a * top + b, 2)
             filled = cal is None or (f"Axis_Filled_{name}" in df and df.at[e, f"Axis_Filled_{name}"] == 1)
             if filled and not row["Abnormal"]:
-                alerts.append("Axis?")   # ticks unreadable in this frame; convert with the previous ticks (or defaults)
+                alerts.append("Axis")    # ticks unreadable in this frame; convert with the previous ticks (or defaults). "Axis?" up to 0.2.4
         row["Alert"] = ",".join(dict.fromkeys(alerts))
         rows.append(row)
     df_breaths = pd.DataFrame(rows)
@@ -1014,7 +1029,10 @@ def _wave_masks(frame):
 def trigger_apexes(frame):
     """List of x (screen columns) of patient-trigger triangle apexes. frame is BGR already passed through _normalize_frame."""
     y0, y1 = Settings.TRIGGER_ROWS
-    hsv = cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2HSV)
+    # 0.2.5: search only the waveform area (plus a margin for the triangle width). Undecoded (not re-encoded) frames show pink in the
+    # numbers panel on the left (x about 52), which was picked up as a triangle
+    xa, xb = Settings.SWEEP_X_LEFT - Settings.TRIGGER_X_MARGIN, Settings.SWEEP_X_RIGHT + Settings.TRIGGER_X_MARGIN
+    hsv = cv2.cvtColor(frame[y0:y1, xa:xb], cv2.COLOR_BGR2HSV)
     d = np.abs(hsv[..., 0].astype(np.int16) - Settings.TRIGGER_HUE)
     d = np.minimum(d, 180 - d)
     mask = ((d <= Settings.TRIGGER_HUE_TOL) & (hsv[..., 1] >= Settings.TRIGGER_SAT_MIN)
@@ -1032,7 +1050,7 @@ def trigger_apexes(frame):
         if len(ys) == 0:
             continue
         top = ys < ys.min() + Settings.TRIGGER_APEX_ROWS
-        out.append(float(x + xs[top].mean()))
+        out.append(float(xa + x + xs[top].mean()))
     return out
 
 

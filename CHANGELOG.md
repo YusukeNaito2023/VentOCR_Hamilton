@@ -28,6 +28,22 @@ Entries for earlier versions below are kept in Japanese.
 - A boundary is not moved by more than SNAP_MAX_SEC (0.8 s) when snapping (normally a median of 0.28 s, 99% within 0.39 s, max 0.66 s in 0.2.4).
   B854's inspiration fell in a stretch the ventilator drew as a flat line (no data), so the nearest onset was B853's second inspiration 1.1 s earlier;
   the boundary now stays at the display-update position as in 0.2.4
+### Robustness for frames decoded without re-encoding (VentOCR 0.8.0 direct decoding)
+- Found by comparing app's 0.8.0-style analysis (original video decoded directly, no per-segment re-encode) with the current style
+  (both engine 0.2.5): one Trigger and seven Alerts differed, and in each case the current style was right (Study Recorder)
+- Triangles are searched only in the waveform area x [SWEEP_X_LEFT − TRIGGER_X_MARGIN, SWEEP_X_RIGHT + TRIGGER_X_MARGIN) (15 px).
+  Sharper frames showed pink in the numbers panel (x about 52), picked up as a triangle in 3,209 frames
+- A triangle redrawn at the left edge is from the previous pass also when the pen is at the right edge and the triangle within
+  TRIGGER_WRAP_PX (50 px) across the wrap (B417: redrawn at x 472 while the pen was at x 1562; with the frame phase of direct decoding
+  no frame showed the old triangle erased, so it became C). The TRIGGER_KEEP_PX check is wrap-aware too
+- After an axis-label read that missed a waveform (e.g. read while the scale was changing), the next AXIS_RETRY_FRAMES (10) frames are also read.
+  Labels were otherwise re-read only when the label column changed, and a failure could stay for 9.5 s on the old scale
+  (B829–B832, 4th panel 0–40 instead of 0–20, values about 2× off)
+### Alerts reorganized (user decision A61)
+- Abnormal and Popup are reported as one alert, Hidden (the two checks are unchanged; the Abnormal column of Breaths.csv stays)
+- TriggerSplit is no longer an alert (splitting by a triangle is part of the algorithm; Frames.csv Trigger_Split still marks it)
+- Axis? is renamed Axis. Partial, Cleared, Clipped, Fragment and Long are unchanged
+- manifest.json outputs.alerts and the README alert table (conditions, thresholds, accuracy exclusion) match this
 ### English
 - manifest.json labels and breath_values labels, schema.py labels and choice labels, README, and code comments/docstrings are now in English
 - Verification (Ptranspulm 2026-10-09 10-25-03.mov, 1 h, python -m ventocr_core, 5 workers, compared with 0.2.4):

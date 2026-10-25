@@ -14,7 +14,7 @@
     A blank ("---" or unreadable) also counts as a value. A value lasting only one frame is ignored. If the two values change one frame apart, this counts as a single update.
     There is no minimum breath duration (the min_breath_sec = 1 s used up to 0.6 has been removed; short breaths under 1 s are kept as one breath each)
   - If VTE and compliance happen to be identical in consecutive breaths, the display does not change. Therefore, if there is no display update from 0.5 s before to 1 s after
-    a patient-trigger triangle (see below), a boundary is placed as if an update had occurred 0.3 s after the triangle (0.8.0; Alert gets TriggerSplit).
+    a patient-trigger triangle (see below), a boundary is placed as if an update had occurred 0.3 s after the triangle (0.8.0; marked in `Trigger_Split` of Frames.csv; no alert since 0.2.5).
     This is not applied near Abnormal frames (3 s before to 1 s after) or at the end of the recording. Consecutive mandatory breaths (no triangle) with identical values cannot be separated
 - **OCR** (selected under "Values to OCR" in the analysis dialog; default: VTE, Compliance, Ppeak):
   - Measured values: expiratory VT (`VTE`), compliance (`Compliance`), peak pressure (`Ppeak`), minute volume (`MinVol`), P0.1 (`P01`).
@@ -44,7 +44,7 @@
     A breath that contains frames in which the airway pressure panel is not visible and has no triangle is blank (the triangle may have been hidden).
     A breath during which the screen was cleared (Cleared in Alert), with an undrawn interval of 0.3 s or more and no triangle, is also blank
     (inspiration may have started during that interval without a triangle being drawn; 0.2.3; Settings.CLEARED_GAP_SEC).
-    A breath containing frames in which a settings dialog covered the waveform panels (Popup in Alert) and having no triangle is also blank (the triangle may have been hidden; 0.2.4)
+    A breath containing frames in which a settings dialog covered the waveform panels (Hidden in Alert) and having no triangle is also blank (the triangle may have been hidden; 0.2.4)
   - initial_ocr records the triangle apexes in each frame (`Trigger_Apexes` in Frames.csv), and post_ocr selects those that newly appear just behind the pen (0 to 40 px)
     (`Trigger_New`). Triangles from the previous sweep also remain on screen to the right of the pen, so they are distinguished by position.
     A triangle redrawn at almost the same position as one from the previous sweep is distinguished by the fact that it remains after the pen has passed
@@ -68,15 +68,34 @@ See `layout.jpg` (red boxes: OCR (Settings.OCR_FIELDS); white boxes: waveforms; 
   The `stable_frames` setting is a frame count at 10 fps; at other frame rates it is converted to the same duration
 - Only the frame images needed for waveform extraction are read, with `cv2.imread` (engine_api 3; about 40 images for a 2-minute video)
 
+## Alerts (the `Alert` column of Breaths.csv) and blank Trigger (0.2.5)
+A breath can have several alerts (comma-separated). "Accuracy evaluation" tells whether the breath is excluded when evaluating reading accuracy
+(`exclude_from_accuracy` in `outputs.alerts` of manifest.json; ENGINE_API.md §8.1).
+
+| Alert | Added when (thresholds) | Accuracy evaluation |
+|---|---|---|
+| Fragment | The first breath of the recording (the recording starts mid-breath) and the last breath (cut at the end of the recording) | Excluded |
+| Hidden | The waveforms were hidden during the breath, by either check: (a) a frame where fewer than 3 waveforms (`AXIS_MIN_PANELS`) have readable axis labels (popup or another screen; `Abnormal` column), or (b) a frame where 10% (`POPUP_COVER_MIN`) or more of the pixels sampled every 8 px in the waveform area (x 467-1567, y 95-1000) are bright (gray above 180), such as a settings dialog (`Wave_Covered` in Frames.csv) | Excluded |
+| Clipped | The waveform sticks to the top or bottom of the plot area (3 or more points in a row, or next to a blank) and could not be re-read from a frame with a wider axis within 22 s (`SWEEP_REREAD_SEC`); the bottom of Volume is not checked | Excluded |
+| Partial | More than 30% of the waveform (Paw) is blank (drawing stopped, screen cleared or hidden, unreadable) | Excluded |
+| Cleared | The ventilator cleared the waveform screen during the breath and restarted from the left edge (the pen moved back left by 100 px (`SWEEP_WRAP_JUMP`) or more before reaching the right edge, or by 15 px (`SWEEP_RESTART_MARGIN`) or more to near the left edge) | Not excluded |
+| Axis | An axis could not be read in the breath's last frame and the previous labels (or the defaults) were used (not added when the frame is hidden) | Not excluded |
+| Long | The waveform is longer than one sweep (1100 px − 15 px margin = 1085 points, about 21.7 s); only the last sweep is kept | Not excluded |
+
+**Blank Trigger (unknown)**: a breath with no new triangle is blank instead of C when any of these holds:
+- it contains frames where the airway pressure panel is not visible (axis labels unreadable, e.g. a popup)
+- the waveform area was covered by a settings dialog (Hidden, check b)
+- the screen was cleared (Cleared) and the waveform has an undrawn stretch of 0.3 s (`CLEARED_GAP_SEC`) or more
+
 ## Limitations
 - P0.1 was "---" (not measured) in the sample videos, so reading its numeric value has not been verified (negative values are also allowed)
 - Waveform axis labels are read by matching against character templates (axis_glyphs.npz). The templates contain no "9" (it did not appear in the videos used to build them), so
-  labels containing "9" (such as 90) cannot be read, and that waveform is converted with the last labels that could be read (Axis? in Alert)
-- Breaths containing frames in which a settings dialog (e.g. ventilation mode settings) covered the waveform panels get Popup in Alert (0.2.4).
+  labels containing "9" (such as 90) cannot be read, and that waveform is converted with the last labels that could be read (Axis in Alert)
+- Breaths containing frames in which a settings dialog (e.g. ventilation mode settings) covered the waveform panels get Hidden in Alert (0.2.4; Popup up to 0.2.4).
   Within the waveform panels (x 467 to 1567, y 95 to 1000), the fraction of bright pixels (gray above 180), sampled every 8 px, is recorded in `Wave_Covered` of Frames.csv,
   and frames with 0.1 (`POPUP_COVER_MIN`) or more are considered covered (normally 0.02 or less; dialogs 0.3 to 0.8).
-  Dialogs that do not hide the axis labels do not cause Abnormal, so they are detected this way. Popup breaths are excluded when evaluating reading accuracy
-- Frames in which fewer than three waveforms have readable axis labels (popups, other screens) are Abnormal (Abnormal in Alert).
+  Dialogs that do not hide the axis labels do not cause Abnormal, so they are detected this way. Hidden breaths are excluded when evaluating reading accuracy
+- Frames in which fewer than three waveforms have readable axis labels (popups, other screens) are Abnormal (`Abnormal` column of Breaths.csv; Hidden in Alert since 0.2.5).
   Hamilton keeps drawing the waveforms in the background during a popup, so waveforms are also read for breaths containing Abnormal frames (0.8.0).
   If the image from which the columns would be read is in the middle of a popup, the four waveforms are read from the frame just after the popup disappears (Reread in Wave_Popup of Breaths.csv).
   If the popup lasts long (one sweep, 22 s or more) and those columns have been overwritten, only Paw is read from the airway pressure panel, which remains visible during the popup (PawOnly).
@@ -84,8 +103,8 @@ See `layout.jpg` (red boxes: OCR (Settings.OCR_FIELDS); white boxes: waveforms; 
 - Screens with a changed horizontal axis (sweep width 22 s) are not supported
 - For breaths longer than one sweep (22 s), only the last sweep is kept (Long in Alert)
 - The first and last breaths of a recording are truncated (Fragment in Alert)
-- Some breaths are C even though spontaneous, because the triangle was not found (5 of 1103 spontaneous breaths in Ptranspulm 2026-10-09. Of these, in B541
-  Hamilton did not output measurements during inspiration and cleared the screen, so no triangle was drawn; blank since 0.2.3. The cause for the others has not been investigated)
+- When the triangle cannot be seen (screen cleared, dialog, popup), Trigger is blank rather than C. In Ptranspulm 2026-10-09 (0.2.5), Trigger matched the Study Recorder
+  for all 1103 A and 151 C breaths; 5 breaths were blank (B541, B854, B990, B991, B988)
 
 ## Author
 - VentOCR Developer Team

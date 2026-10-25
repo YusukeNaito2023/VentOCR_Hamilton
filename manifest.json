@@ -307,34 +307,14 @@
     ],
     "alerts": [
       {
-        "name": "TriggerSplit",
-        "label": "Split by a patient-trigger triangle (no display update)",
-        "exclude_from_accuracy": false
-      },
-      {
         "name": "Fragment",
         "label": "Cut at the start or end of the recording",
         "exclude_from_accuracy": true
       },
       {
-        "name": "Abnormal",
-        "label": "Popup or another screen (axis labels not readable)",
+        "name": "Hidden",
+        "label": "Waveforms hidden by a popup, a settings dialog or another screen",
         "exclude_from_accuracy": true
-      },
-      {
-        "name": "Popup",
-        "label": "A settings dialog covered the waveform area",
-        "exclude_from_accuracy": true
-      },
-      {
-        "name": "Axis?",
-        "label": "Axis labels not read; previous scale used",
-        "exclude_from_accuracy": false
-      },
-      {
-        "name": "Long",
-        "label": "Longer than one sweep (22 s); only the last sweep",
-        "exclude_from_accuracy": false
       },
       {
         "name": "Clipped",
@@ -349,6 +329,16 @@
       {
         "name": "Cleared",
         "label": "The ventilator cleared the waveform screen during the breath",
+        "exclude_from_accuracy": false
+      },
+      {
+        "name": "Axis",
+        "label": "Axis labels not read; previous scale used",
+        "exclude_from_accuracy": false
+      },
+      {
+        "name": "Long",
+        "label": "Longer than one sweep (22 s); only the last sweep",
         "exclude_from_accuracy": false
       }
     ]
