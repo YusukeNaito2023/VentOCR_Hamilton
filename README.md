@@ -1,91 +1,91 @@
 # Hamilton VentOCR Engine
 
 ## Supported Devices
-- Hamilton の人工呼吸器（左に数値、中央に 気道内圧 / フロー / ボリューム / Pes または Ptranspulm の4波形が並ぶ画面）
-- 1920x1080 で収録した動画（ほかの解像度は 1920x1080 に縮小・拡大してから読む）
+- Hamilton ventilators (screen with numeric values on the left and four waveforms in the center: airway pressure / flow / volume / Pes or Ptranspulm)
+- Videos recorded at 1920x1080 (other resolutions are scaled to 1920x1080 before reading)
 
 ## Description
-- **1呼吸** = 左側の数値（コンプライアンス・呼気VT）の表示が更新されてから、次に更新されるまで。
-  - 表示の更新は吸気の始まりより約0.16秒遅れるので、区切りは更新の `boundary_shift_sec`（既定 -0.5秒）前に置く（呼気の終わりで切れる）
-  - 波形の区切りは吸気の始まりへ合わせる（`trim_to_breath`）。自発の呼吸は患者トリガーの三角の 0.08秒前（0.8.1）、
-    強制の呼吸は流量の立ち上がりの足元の 0.04秒前。三角は Hamilton が呼吸を始めた位置そのもので、Volume が 0 に戻る位置と一致する
-  - コンプライアンスが前の呼吸と同じ値のときも区切れるよう、既定では VTE の更新も区切りに使う（`breath_trigger`）
-  - 更新 = VTE かコンプライアンスの新しい値が `stable_frames`（既定 2）フレーム以上続いたこと（0.7.0）。区切りはその値が出た最初のフレーム。
-    空欄（「---」・読めない）も1つの値。1フレームだけの値は無視する。2つの値の変化が1フレーム差なら1回の更新。
-    時間で間引かない（0.6 までの min_breath_sec = 1秒 は廃止。1秒未満の短い呼吸もそのまま1呼吸）
-  - 前後の呼吸の VTE・コンプライアンスがたまたま同じ値だと表示が変わらないので、患者トリガーの三角（下記）の前 0.5秒〜後 1秒に
-    表示の更新が無ければ、三角の 0.3秒後に更新があったものとして区切る（0.8.0。Alert に TriggerSplit）。
-    Abnormal の近く（前 3秒〜後 1秒）と録画の終わりは除く。強制の呼吸（三角が出ない）どうしが同じ値のときは区切れない
-- **OCR**（解析ダイアログの「OCR する値」で選ぶ。既定: VTE・Compliance・Ppeak）:
-  - 測定値: 呼気VT（`VTE`）、コンプライアンス（`Compliance`）、ピーク圧（`Ppeak`）、分時換気量（`MinVol`）、P0.1（`P01`）。
-    画面の数値は「直前の呼吸」の測定値なので、Breaths.csv の値は次の呼吸の間に表示される値、`*_displayed` はその呼吸の間に表示されていた値
-  - 設定値: 換気モード（`Mode`、文字）、呼吸回数（`Set_Rate`）、Δ吸気圧（`Set_Pinsp`）、PEEP/CPAP（`Set_PEEP`）、酸素濃度（`Set_Oxygen`）。
-    その呼吸の間に表示されていた値
-  - 選ばなかった値の列は出力しない
-- **波形**: Pressure（気道内圧 Paw）、Flow、Volume と、4 段目の圧。BreathCSVs/<n>.csv の列は X, Pressure, Flow, Volume, Pes（または Ptranspulm）
-  - 4 段目は Hamilton の設定で Pes（食道内圧）か Ptranspulm（経肺圧 = Paw − Pes）を表示できる。どちらかは解析の設定
-    `post_ocr.ptranspulm`（既定オフ = Pes）で選ぶ（0.2.0）。オンなら列の名前が Ptranspulm になり、Breaths.csv・Frames.csv の
-    Axis_Ptranspulm・Ptranspulm_min / Ptranspulm_max、fields.txt・scale_meta.json の名前も変わる（値は同じ）。
-    パネルの名前は読まないので、動画ごとに正しく選ぶこと。記録の途中で切り替えた動画には対応しない
-  - 掃引は 50 px/秒で左から右へ描き、x=1567 に達すると x=467 に戻って上書きする（1周 22秒、wrap around）
-  - 各フレームで前のフレームから変化した列の右端（= ペン先 + 消去帯 3px）を記録し、毎フレームのペン先を追跡する（0.6.0。core.track_sweep）
-  - 画面操作などで描画が止まり、画面全体が消去されて途中から左端に戻ることがある。その前の部分は消去の前にペン先を見つけた最後の
-    フレームから読む（0.2.3。左端に戻ったと分かるのは数フレーム後で、0.2.2 までは消去された画面を読んでいた）。
-    描画が止まっていた間は空欄（3割以上が空欄の呼吸は Alert に Partial）。画面が消去された呼吸は Alert に Cleared（0.2.3）。
-    Hamilton が測定値を出していない間（Ptranspulm 2026-10-09 の B541 では約 1.5 秒。Study Recorder でも Paw 0・Flow なし）は
-    画面にも波形が無いので、取り戻せない
-  - 縦軸の範囲を超えた波形は描画領域の端で切れる。その後 Hamilton が縦軸を広げたら、列がまだ画面に残っているうちに読み直す
-    （Breaths.csv の Wave_Reread に読み直した波形。読み直せなければ Alert に Clipped。ボリュームの下端（0 を下回る部分）は判定しない）
-  - 呼吸の波形は、その呼吸の最後のフレームから「開始時のペン先の次の列〜終了時のペン先の列」を切り出す（折り返しをまたぐ呼吸はつなぐ）
-  - 各点の時刻 = `Wave_T0` + 行番号 / `Wave_Rate`（Breaths.csv）
-- **トリガー**（0.8.0）: Breaths.csv の `Trigger` = `A`（患者の自発のトリガー）/ `C`（強制。器械のトリガー）。呼吸プロパティのサマリーにも出す
-  - Hamilton が自発トリガーと判定した呼吸の始まりに、気道内圧の時間軸のすぐ下にピンクの三角（▲）が描かれる。
-    その呼吸の間に新しい三角が描かれたら A、無ければ C。ポップアップの間も気道内圧の欄が見えていれば（縦軸の目盛りを読めれば）三角を使う。
-    気道内圧の欄が見えないフレームを含み、三角が無い呼吸は空欄（隠れていたかもしれない）。
-    画面が消去された呼吸（Alert に Cleared）で、波形の描かれていない区間が 0.3 秒以上あり三角が無い呼吸も空欄
-    （その間に吸気が始まり、三角が描かれなかったかもしれない。0.2.3。Settings.CLEARED_GAP_SEC）
-    設定のダイアログが波形の欄を覆っていたフレームを含み（Alert に Popup）、三角が無い呼吸も空欄（三角が隠れていたかもしれない。0.2.4）
-  - initial_ocr で各フレームの三角の頂点を記録し（Frames.csv の `Trigger_Apexes`）、post_ocr でペン先のすぐ後ろ（0〜40px）に
-    新しく出たものを選ぶ（`Trigger_New`）。画面には1周前の三角もペン先より右に残っているので、位置で区別する。
-    1周前の三角とほぼ同じ位置に描き直されたものは、ペン先が通り過ぎた後も残っていることで区別する
-  - 時間軸は気道内圧の 0 の位置で、縦軸のスケールにより上下に動くので、気道内圧の欄（y=100〜315）の中から色と大きさで探す。
-    時間軸の目盛りの数字（5・10・15・20）と重なった三角は、色がにじんで小片に分かれるので、つないでから判定する
+- **One breath** = from one update of the numeric values on the left (compliance, expiratory VT) to the next update.
+  - The display update lags the start of inspiration by about 0.16 s, so the boundary is shifted from the update by `boundary_shift_sec` (default -0.5 s, i.e. 0.5 s earlier), so that each breath ends at the end of expiration
+  - Waveform boundaries are aligned to the start of inspiration (`trim_to_breath`): for spontaneous breaths, 0.08 s before the patient-trigger triangle (0.8.1);
+    for mandatory breaths, 0.04 s before the foot of the flow upstroke. The triangle marks exactly where Hamilton started the breath and coincides with the point where Volume returns to 0
+  - So that a boundary is detected even when compliance has the same value as in the previous breath, VTE updates are also used as boundaries by default (`breath_trigger`)
+  - Update = a new value of VTE or compliance persists for at least `stable_frames` (default 2) frames (0.7.0). The boundary is the first frame showing that value.
+    A blank ("---" or unreadable) also counts as a value. A value lasting only one frame is ignored. If the two values change one frame apart, this counts as a single update.
+    There is no minimum breath duration (the min_breath_sec = 1 s used up to 0.6 has been removed; short breaths under 1 s are kept as one breath each)
+  - If VTE and compliance happen to be identical in consecutive breaths, the display does not change. Therefore, if there is no display update from 0.5 s before to 1 s after
+    a patient-trigger triangle (see below), a boundary is placed as if an update had occurred 0.3 s after the triangle (0.8.0; Alert gets TriggerSplit).
+    This is not applied near Abnormal frames (3 s before to 1 s after) or at the end of the recording. Consecutive mandatory breaths (no triangle) with identical values cannot be separated
+- **OCR** (selected under "Values to OCR" in the analysis dialog; default: VTE, Compliance, Ppeak):
+  - Measured values: expiratory VT (`VTE`), compliance (`Compliance`), peak pressure (`Ppeak`), minute volume (`MinVol`), P0.1 (`P01`).
+    The numbers on screen are the measurements of the "previous breath", so the value in Breaths.csv is the value displayed during the next breath, and `*_displayed` is the value displayed during that breath itself
+  - Settings: ventilation mode (`Mode`, text), respiratory rate (`Set_Rate`), Δ inspiratory pressure (`Set_Pinsp`), PEEP/CPAP (`Set_PEEP`), oxygen concentration (`Set_Oxygen`).
+    These are the values displayed during that breath
+  - Columns for values that are not selected are not output
+- **Waveforms**: Pressure (airway pressure, Paw), Flow, Volume, and the pressure in the 4th panel. The columns of BreathCSVs/<n>.csv are X, Pressure, Flow, Volume, Pes (or Ptranspulm)
+  - The 4th panel can show either Pes (esophageal pressure) or Ptranspulm (transpulmonary pressure = Paw − Pes), depending on the Hamilton settings. Which one is chosen with the analysis setting
+    `post_ocr.ptranspulm` (default off = Pes) (0.2.0). When on, the column is named Ptranspulm, and the names in Breaths.csv and Frames.csv
+    (Axis_Ptranspulm, Ptranspulm_min / Ptranspulm_max), fields.txt and scale_meta.json change accordingly (the values are the same).
+    The panel name is not read, so choose the correct setting for each video. Videos in which the display was switched during the recording are not supported
+  - The sweep draws from left to right at 50 px/s; on reaching x=1567 it returns to x=467 and overwrites (one sweep 22 s, wrap around)
+  - In each frame, the right edge of the columns that changed since the previous frame (= pen (sweep head) + 3 px erase band) is recorded, and the pen is tracked in every frame (0.6.0; core.track_sweep)
+  - Drawing can stop (e.g. due to screen operations), after which the whole screen is cleared and drawing restarts from the left edge mid-breath. The part before that is read from the last frame
+    in which the pen was found before the clearing (0.2.3; the return to the left edge is only recognized a few frames later, and up to 0.2.2 the cleared screen was read).
+    The period during which drawing was stopped is blank (breaths with 30% or more blank get Partial in Alert). Breaths during which the screen was cleared get Cleared in Alert (0.2.3).
+    While Hamilton is not outputting measurements (about 1.5 s in B541 of Ptranspulm 2026-10-09; the Study Recorder also shows Paw 0 and no Flow),
+    no waveform is drawn on screen either, so that part cannot be recovered
+  - Waveforms exceeding the vertical axis range are cut off at the edge of the plot area. If Hamilton then widens the axis, the columns are re-read while they are still on screen
+    (the re-read waveform is indicated in Wave_Reread of Breaths.csv; if it cannot be re-read, Alert gets Clipped. The lower edge of Volume (the part below 0) is not checked)
+  - A breath's waveform is cut out of the last frame of that breath, from "the column after the pen position at the start" to "the pen column at the end" (breaths spanning a wrap-around are joined)
+  - Time of each point = `Wave_T0` + row number / `Wave_Rate` (Breaths.csv)
+- **Trigger** (0.8.0): `Trigger` in Breaths.csv = `A` (patient-triggered, spontaneous) / `C` (mandatory, machine-triggered). It is also shown in the breath property summary
+  - At the start of a breath that Hamilton classifies as patient-triggered, a pink triangle (▲) is drawn just below the time axis of the airway pressure panel.
+    If a new triangle is drawn during the breath, it is A; otherwise C. During a popup, the triangle is still used as long as the airway pressure panel is visible (its axis labels can be read).
+    A breath that contains frames in which the airway pressure panel is not visible and has no triangle is blank (the triangle may have been hidden).
+    A breath during which the screen was cleared (Cleared in Alert), with an undrawn interval of 0.3 s or more and no triangle, is also blank
+    (inspiration may have started during that interval without a triangle being drawn; 0.2.3; Settings.CLEARED_GAP_SEC).
+    A breath containing frames in which a settings dialog covered the waveform panels (Popup in Alert) and having no triangle is also blank (the triangle may have been hidden; 0.2.4)
+  - initial_ocr records the triangle apexes in each frame (`Trigger_Apexes` in Frames.csv), and post_ocr selects those that newly appear just behind the pen (0 to 40 px)
+    (`Trigger_New`). Triangles from the previous sweep also remain on screen to the right of the pen, so they are distinguished by position.
+    A triangle redrawn at almost the same position as one from the previous sweep is distinguished by the fact that it remains after the pen has passed
+  - The time axis is at the 0 position of airway pressure and moves up and down with the axis scale, so triangles are searched for by color and size within the airway pressure panel (y=100 to 315).
+    A triangle overlapping the time-axis tick numbers (5, 10, 15, 20) bleeds in color and breaks into small fragments, so the fragments are joined before classification
 
-## 縦軸のスケール（0.5.0）
-- Hamilton は波形ごとに縦軸のスケールを頻繁に自動で変える（Ptranspulm 2026-10-09 の1時間で15通り。
-  Paw 0〜20 / 0〜40、Flow ±45 / ±75 / ±150、Volume 400 / 800 / 1600、Pes 0〜20 / -10〜20 / -20〜20 / -20〜40 / -40〜40 など。0 の位置も動く）
-- 各フレームで縦軸の目盛りの数字（x=414〜462）を読み、波形ごとに「数字の y → 値」を直線で当てはめる（axis_scale.py）。
-  数字は 0〜9 と「-」だけで毎回同じ形なので、汎用の OCR ではなく1文字ずつ見本と照合する
-- 呼吸の波形は、切り出した最後のフレームの換算式で物理量にする。Breaths.csv の Axis_<波形> = "a;b;最小の目盛り;最大の目盛り"（値 = a*y + b）、
-  P_min / P_max などは描画領域（画面の縦の軸線）の下端・上端の値（0.8.1。0.8.0 までは目盛りの最小・最大の数字で、
-  一番下の目盛りより下に出た波形がチャートの外に出ていた）
+## Vertical Axis Scale (0.5.0)
+- Hamilton frequently and automatically changes the vertical axis scale of each waveform (15 different scales in one hour of Ptranspulm 2026-10-09:
+  Paw 0 to 20 / 0 to 40, Flow ±45 / ±75 / ±150, Volume 400 / 800 / 1600, Pes 0 to 20 / -10 to 20 / -20 to 20 / -20 to 40 / -40 to 40, etc. The 0 position also moves)
+- In each frame, the axis labels (x=414 to 462) are read, and for each waveform a straight line "label y → value" is fitted (axis_scale.py).
+  The labels consist only of 0 to 9 and "-" and always have the same shapes, so each character is matched against templates instead of using general-purpose OCR
+- A breath's waveform is converted to physical units with the conversion of the last frame it was cut from. In Breaths.csv, Axis_<waveform> = "a;b;lowest axis label;highest axis label" (value = a*y + b);
+  P_min / P_max etc. are the values at the bottom and top edges of the plot area (the vertical axis line on screen) (0.8.1; up to 0.8.0 these were the smallest and largest label numbers,
+  and waveforms below the lowest label went outside the chart)
 
 ## Expected Layout
-See `layout.jpg`（赤枠: OCR（Settings.OCR_FIELDS）、白枠: 波形、青枠: 画面確認用の縦軸目盛り）。
+See `layout.jpg` (red boxes: OCR (Settings.OCR_FIELDS); white boxes: waveforms; blue boxes: axis labels used to check the screen).
 
-## フレームレートとフレームの画像
-- 解析のフレームレートは 10 fps 以外でもよい（engine_api 2。5・10・30 fps で確認）。秒とフレーム数の換算は `post_ocr.fps` を使う。
-  設定の `stable_frames` は 10 fps のときのフレーム数で、ほかの fps では同じ時間に換算する
-- フレームの画像は、波形の抽出で必要なものだけを `cv2.imread` で読む（engine_api 3。2 分の動画で 40 枚程度）
+## Frame Rate and Frame Images
+- The analysis frame rate need not be 10 fps (engine_api 2; verified at 5, 10 and 30 fps). Conversion between seconds and frame counts uses `post_ocr.fps`.
+  The `stable_frames` setting is a frame count at 10 fps; at other frame rates it is converted to the same duration
+- Only the frame images needed for waveform extraction are read, with `cv2.imread` (engine_api 3; about 40 images for a 2-minute video)
 
 ## Limitations
-- P0.1 は、サンプル動画で「---」（測定なし）だったため、数値の読み取りは未確認（負の値も読む設定）
-- 波形の縦軸の目盛りは、文字の見本（axis_glyphs.npz）と照合して読む。見本に「9」が無い（作成に使った動画に出てこなかった）ので、
-  「9」を含む目盛り（90 など）は読めず、その波形は直前に読めた目盛りで換算する（Alert に Axis?）
-- 設定のダイアログ（換気モードの設定など）が波形の欄を覆っていたフレームを含む呼吸は Alert に Popup（0.2.4）。
-  波形の欄（x 467〜1567、y 95〜1000）の 8 px おきの画素のうち、明るい（グレー 180 より上）ものの割合を Frames.csv の `Wave_Covered` に記録し、
-  0.1（`POPUP_COVER_MIN`）以上のフレームを覆われているとする（ふだんは 0.02 以下、ダイアログは 0.3〜0.8）。
-  縦軸の目盛りを隠さないダイアログは Abnormal にならないので、これで見つける。Popup の呼吸は、読み取りの精度の評価では除く
-- 縦軸の目盛りが読めた波形が3つ未満のフレーム（ポップアップ・別の画面）は Abnormal（Alert に Abnormal）。
-  ポップアップの間も Hamilton は裏で波形を描き続けるので、Abnormal を含む呼吸も波形を読む（0.8.0）。
-  列を読む画像がポップアップの最中なら、ポップアップが消えた直後のフレームから4つの波形を読む（Breaths.csv の Wave_Popup に Reread）。
-  ポップアップが長く（1周 22秒以上）その列が上書きされていたら、ポップアップの間も見えている気道内圧の欄から Paw だけを読む（PawOnly）。
-  途中で画面が消去された場合や、気道内圧の欄も見えない場合は空欄
-- 横軸（掃引の幅 22秒）を変えた画面には未対応
-- 1周（22秒）より長い呼吸は最後の1周分だけ（Alert に Long）
-- 録画の最初と最後の呼吸は途中で切れている（Alert に Fragment）
-- 三角を見つけられず、自発でも C になる呼吸がある（Ptranspulm 2026-10-09 で自発 1103 呼吸のうち 5 呼吸。そのうち B541 は、
-  吸気の間 Hamilton が測定値を出さず画面を消去したため三角が描かれなかった。0.2.3 から空欄。ほかは原因を未調査）
+- P0.1 was "---" (not measured) in the sample videos, so reading its numeric value has not been verified (negative values are also allowed)
+- Waveform axis labels are read by matching against character templates (axis_glyphs.npz). The templates contain no "9" (it did not appear in the videos used to build them), so
+  labels containing "9" (such as 90) cannot be read, and that waveform is converted with the last labels that could be read (Axis? in Alert)
+- Breaths containing frames in which a settings dialog (e.g. ventilation mode settings) covered the waveform panels get Popup in Alert (0.2.4).
+  Within the waveform panels (x 467 to 1567, y 95 to 1000), the fraction of bright pixels (gray above 180), sampled every 8 px, is recorded in `Wave_Covered` of Frames.csv,
+  and frames with 0.1 (`POPUP_COVER_MIN`) or more are considered covered (normally 0.02 or less; dialogs 0.3 to 0.8).
+  Dialogs that do not hide the axis labels do not cause Abnormal, so they are detected this way. Popup breaths are excluded when evaluating reading accuracy
+- Frames in which fewer than three waveforms have readable axis labels (popups, other screens) are Abnormal (Abnormal in Alert).
+  Hamilton keeps drawing the waveforms in the background during a popup, so waveforms are also read for breaths containing Abnormal frames (0.8.0).
+  If the image from which the columns would be read is in the middle of a popup, the four waveforms are read from the frame just after the popup disappears (Reread in Wave_Popup of Breaths.csv).
+  If the popup lasts long (one sweep, 22 s or more) and those columns have been overwritten, only Paw is read from the airway pressure panel, which remains visible during the popup (PawOnly).
+  If the screen is cleared in the meantime, or the airway pressure panel is not visible either, the waveform is blank
+- Screens with a changed horizontal axis (sweep width 22 s) are not supported
+- For breaths longer than one sweep (22 s), only the last sweep is kept (Long in Alert)
+- The first and last breaths of a recording are truncated (Fragment in Alert)
+- Some breaths are C even though spontaneous, because the triangle was not found (5 of 1103 spontaneous breaths in Ptranspulm 2026-10-09. Of these, in B541
+  Hamilton did not output measurements during inspiration and cleared the screen, so no triangle was drawn; blank since 0.2.3. The cause for the others has not been investigated)
 
 ## Author
 - VentOCR Developer Team

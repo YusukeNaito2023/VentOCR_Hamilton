@@ -1,13 +1,13 @@
-"""波形の縦軸の目盛りの数字を読み、画面の y → 物理量 の換算式を求める。
+"""Read the tick-label numbers on the waveforms' vertical axes and derive the screen y -> physical value conversion.
 
-Hamilton は波形ごとに縦軸のスケールを頻繁に自動で変える（例: Paw 0〜20 / 0〜40、Flow ±45 / ±75 / ±150、
-Volume 400 / 800 / 1600、Pes 0〜20 / -10〜20 / -40〜40。0 の位置も動く）。そのため呼吸ごとに目盛りを読む。
+Hamilton frequently auto-rescales the vertical axis of each waveform (e.g. Paw 0-20 / 0-40, Flow ±45 / ±75 / ±150,
+Volume 400 / 800 / 1600, Pes 0-20 / -10 to 20 / -40 to 40; the position of 0 also moves), so the ticks are read for every breath.
 
-目盛りの数字は 0〜9 と「-」だけで、毎回同じフォント・大きさ（高さ12〜14px）で描かれる。汎用の OCR（EasyOCR）は
-この大きさの数字を読み違えるので、1文字ずつ見本（axis_glyphs.npz）と照合する。
-見本は 2026-10-12、Ptranspulm 2026-10-09 の動画に出てきた14通りの目盛りから文字を切り出し、
-形の似たものをまとめて、それぞれ何の文字かを目視で決めて作った（「9」は出てこなかったので見本が無い）。
-見本に無い形の文字がある目盛りは読まない（その波形は読めなかった扱い）。
+Tick labels consist only of 0-9 and "-", always drawn in the same font and size (12-14 px high). General-purpose OCR (EasyOCR)
+misreads digits this small, so each character is matched against templates (axis_glyphs.npz).
+Templates were made on 2026-10-12 by cutting characters out of the 14 tick-label sets seen in the Ptranspulm 2026-10-09 video,
+grouping similar shapes, and assigning each group its character by eye (no template for "9", which never appeared).
+Axes containing a character shape not in the templates are not read (that waveform is treated as unreadable).
 """
 import os
 
@@ -16,7 +16,7 @@ import numpy as np
 
 from . import Settings
 
-_GLYPH_SIZE = (10, 14)  # (幅, 高さ)。照合はこの大きさにそろえて行う
+_GLYPH_SIZE = (10, 14)  # (width, height). Matching is done after resizing to this size
 
 
 def _load_glyphs():
@@ -41,7 +41,7 @@ def _norm(img):
 
 
 def _read_char(img):
-    """1文字の画像 → 文字（見本との相関が AXIS_MATCH_MIN 未満なら None）。"""
+    """Image of one character -> character (None if the correlation with the templates is below AXIS_MATCH_MIN)."""
     v = _norm(img)
     score = (_TEMPLATES * v).sum(axis=(1, 2))
     score[np.abs(_WIDTHS - img.shape[1]) > 2] = -1
@@ -50,7 +50,7 @@ def _read_char(img):
 
 
 def read_labels(gray, y0, y1):
-    """画面の y0〜y1 の範囲にある目盛りの数字 → [(数字の中心の y, 値), ...]。読めない行は含めない。"""
+    """Tick-label numbers in screen rows y0-y1 -> [(y of the number's center, value), ...]. Unreadable rows are omitted."""
     x0, x1 = Settings.AXIS_LABEL_X
     g = gray[y0:y1, x0:x1]
     m = g > Settings.AXIS_BIN_THRESH
@@ -58,7 +58,7 @@ def read_labels(gray, y0, y1):
     out = []
     for a, b in _runs(m.any(axis=1)):
         if not (h0 <= b - a + 1 <= h1):
-            continue  # 目盛りの点・スクロールバー・ポップアップなど
+            continue  # tick dots, scroll bar, popups, etc.
         line = m[a:b + 1]
         text = ""
         for c0, c1 in _runs(line.any(axis=0)):
@@ -74,9 +74,9 @@ def read_labels(gray, y0, y1):
 
 
 def read_axis(gray):
-    """全波形の換算式 → {波形名: (a, b, 最小の目盛り, 最大の目盛り) または None}。値 = a * y + b。
+    """Conversion for all waveforms -> {wave name: (a, b, min tick, max tick) or None}. value = a * y + b.
 
-    目盛りが2つ以上読め、直線から AXIS_FIT_TOL_PX 以上外れる目盛りが無く、上ほど値が大きいときだけ採用する。
+    Adopted only when at least 2 ticks are read, no tick deviates from the line by AXIS_FIT_TOL_PX or more, and values increase upward.
     """
     out = {}
     for name, (y0, y1) in Settings.AXIS_PANELS.items():
@@ -94,12 +94,12 @@ def read_axis(gray):
 
 
 def encode(axis):
-    """read_axis の結果 → Frames.csv に入れる文字列（波形ごと "a;b;min;max"、読めなければ空）。"""
+    """read_axis result -> string for Frames.csv (per waveform "a;b;min;max", empty if unreadable)."""
     return {f"Axis_{name}": ("" if r is None else f"{r[0]:.6f};{r[1]:.4f};{r[2]:g};{r[3]:g}") for name, r in axis.items()}
 
 
 def decode(text):
-    """encode の文字列 → (a, b, min, max) または None。"""
+    """encode string -> (a, b, min, max) or None."""
     if not isinstance(text, str) or text.count(";") != 3:
         return None
     try:

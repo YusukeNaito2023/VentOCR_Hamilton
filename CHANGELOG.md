@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## 0.2.5 (2026-10-25)
+From this version on, the engine's user-facing text is in English (manifest labels, settings, README, code comments and docstrings).
+Entries for earlier versions below are kept in Japanese.
+### Decimals below 10 in VTE and peak pressure were truncated
+- Hamilton shows VTE (expiratory VT) and peak pressure with one decimal below 10 ("9.6") and as integers from 10 up
+  (36,881 Study Recorder records: no integer below 10; every value with a decimal is below 10: Exp.Volume 17 (max 9.6), P max 7)
+- Up to 0.2.4 these fields were type "int", so a correct EasyOCR reading "9.6" became 9 (Ptranspulm 2026-10-09, B939; shown in the
+  yellow alarm colour; the colour did not affect reading: 57 of the 58 yellow VTE breaths matched the Study Recorder, the remaining one was this truncation)
+- int fields with small_decimal (VTE, Ppeak) keep a reading of the form "one digit . one digit" as a decimal; everything else stays an integer.
+  Cost: one string test
+- manifest.json outputs.breath_values format of VTE, Ppeak, VTE_displayed and Ppeak_displayed: {:.0f} → {:g} (so 9.6 is not shown as 10)
+### A screen clear right after a normal wrap was missed (Alert Cleared)
+- Since 0.2.3 a mid-sweep clear (wrap = 2) was detected only when the pen moved back left by 100 px (SWEEP_WRAP_JUMP) or more.
+  A clear right after a normal wrap (pen near the left edge) moved back less than 100 px and was missed
+  (Ptranspulm 2026-10-09, B854: cleared at frame 26449, pen x 523 → 472; no Cleared, and the part before the clear was read from the cleared screen)
+- A back-jump of SWEEP_RESTART_MARGIN (15 px) or more to near the left edge also starts a new pass (wrap = 2 unless the pen had reached the right edge)
+### A patient-trigger triangle at the very left edge was missed (Trigger C instead of A)
+- A new triangle is one just behind the pen (pen − apex within TRIGGER_NEW_LAG_PX). A triangle drawn at the left edge as the sweep wraps
+  can first appear while the pen is still recorded at the right edge, so pen − apex was about 1100 px and it was not counted
+  (Ptranspulm 2026-10-09, B911: apex x 468.5 at frame 27994, pen x 1566)
+- pen − apex is now wrap-aware (more than half a pass: subtract one pass; less than minus half a pass: add one pass)
+### Breath boundaries are not snapped across an undrawn stretch
+- With the B854 fix the part before the clear became readable, and the boundary between B853 and B854 was snapped 1.75 s back onto B853's second
+  inspiration (Study Recorder boundary: 1.3 s later). An inspiration-onset candidate is no longer used when an undrawn stretch of CLEARED_GAP_SEC (0.3 s)
+  or more lies between it and the original boundary (the true onset may lie inside it)
+- A boundary is not moved by more than SNAP_MAX_SEC (0.8 s) when snapping (normally a median of 0.28 s, 99% within 0.39 s, max 0.66 s in 0.2.4).
+  B854's inspiration fell in a stretch the ventilator drew as a flat line (no data), so the nearest onset was B853's second inspiration 1.1 s earlier;
+  the boundary now stays at the display-update position as in 0.2.4
+### English
+- manifest.json labels and breath_values labels, schema.py labels and choice labels, README, and code comments/docstrings are now in English
+- Verification (Ptranspulm 2026-10-09 10-25-03.mov, 1 h, python -m ventocr_core, 5 workers, compared with 0.2.4):
+  - Breath count (1260) and breath boundaries (Frame, End_Frame) unchanged
+  - B939 VTE and B940 VTE_displayed 9 → 9.6 (Study Recorder 9.6); B854 Alert Cleared, Trigger C → blank; B911 Trigger C → A;
+    waveform boundaries of B853/B854 and B910/B911 moved (B853/B854: 2643.21 s, Study Recorder 2643.46 s, 0.2.4 2643.87 s;
+    B911 start 2799.28 s, Study Recorder 2799.35 s, 0.2.4 2799.06 s). The X column of later waveforms shifts by +10 (B854's clear is a new pass)
+  - Trigger vs Study Recorder (IsPatientTriggeredBreath): A 1103/1103 patient, C 151/151 machine, blank 5 (B541, B854, B990, B991, B988)
+  - Analysis time: 474.4 s (0.2.4: 450.3 s; within run-to-run variation)
+
 ## 0.2.4 (2026-10-25)
 ### 設定のダイアログが波形の欄を覆った呼吸（Alert に Popup）
 - 換気モードの設定などのダイアログは、波形の欄を覆っても縦軸の目盛りを隠さないことがあり、Abnormal にならなかった

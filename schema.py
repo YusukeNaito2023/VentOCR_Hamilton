@@ -2,57 +2,57 @@ ENGINE_SETTINGS_SCHEMA = {
     "initial_ocr": {
         "ocr_keys": {
             "type": "multiselect",
-            "primary": True,          # 解析ダイアログの「解析する値」に出す
+            "primary": True,          # shown under "values to analyze" in the analysis dialog
             "choices": ["VTE", "Compliance", "Ppeak", "MinVol", "P01",
                         "Mode", "Set_Rate", "Set_Pinsp", "Set_PEEP", "Set_Oxygen"],
             "choice_labels": {
-                "VTE": "呼気VT（換気量）", "Compliance": "コンプライアンス", "Ppeak": "ピーク圧",
-                "MinVol": "分時換気量", "P01": "P0.1", "Mode": "換気モード（設定）",
-                "Set_Rate": "呼吸回数（設定）", "Set_Pinsp": "Δ吸気圧（設定）",
-                "Set_PEEP": "PEEP/CPAP（設定）", "Set_Oxygen": "酸素濃度（設定）"
+                "VTE": "Expiratory VT", "Compliance": "Compliance", "Ppeak": "Peak pressure",
+                "MinVol": "Minute volume", "P01": "P0.1", "Mode": "Ventilation mode (setting)",
+                "Set_Rate": "Rate (setting)", "Set_Pinsp": "ΔPinsp (setting)",
+                "Set_PEEP": "PEEP/CPAP (setting)", "Set_Oxygen": "Oxygen (setting)"
             },
             "default": ["VTE", "Compliance", "Ppeak"],
-            "label": "OCR する値（呼吸の区切りに使う値は常に読み取ります）"
+            "label": "Values to OCR (the values used to split breaths are always read)"
         },
         "use_gpu": {
             "type": "bool",
             "default": True,
-            "label": "GPU を使う"
+            "label": "Use GPU"
         },
         "diff_thresh": {
             "type": "float",
             "default": 3.0,
-            "label": "読み直す変化の大きさ（平均の明るさの差）"
+            "label": "Change that triggers a re-read (difference in mean brightness)"
         }
     },
     "post_ocr": {
         "breath_trigger": {
             "type": "multiselect",
             "choices": ["Compliance", "VTE"],
-            "choice_labels": {"Compliance": "コンプライアンス", "VTE": "呼気VT"},
+            "choice_labels": {"Compliance": "Compliance", "VTE": "Expiratory VT"},
             "default": ["Compliance", "VTE"],
-            "label": "呼吸の区切り = 表示が更新される値"
+            "label": "Breath boundary = update of these displayed values"
         },
         "boundary_shift_sec": {
             "type": "float",
             "default": -0.5,
-            "label": "区切りを表示の更新からずらす（秒）"
+            "label": "Shift of the boundary from the display update (s)"
         },
         "stable_frames": {
             "type": "int",
             "default": 2,
-            "label": "値の変化とみなすのに続くフレーム数（VTE・コンプライアンス。10 fps のとき。ほかの fps では同じ時間に換算）"
+            "label": "Frames a new value must persist to count as a change (VTE, Compliance; at 10 fps, converted to the same time at other fps)"
         },
         "trim_to_breath": {
             "type": "bool",
             "default": True,
-            "label": "波形の区切りを吸気の始まりに合わせる"
+            "label": "Align waveform boundaries to the start of inspiration"
         },
         "ptranspulm": {
             "type": "bool",
-            "primary": True,          # 解析ダイアログの上に出す（動画ごとに確かめる項目）
+            "primary": True,          # shown at the top of the analysis dialog (check for each video)
             "default": False,
-            "label": "4段目の波形は Ptranspulm（経肺圧）。オフなら Pes（食道内圧）。記録の途中で切り替えないこと"
+            "label": "4th waveform is Ptranspulm (transpulmonary pressure); off = Pes (esophageal pressure). Do not switch during a recording"
         }
     }
 }

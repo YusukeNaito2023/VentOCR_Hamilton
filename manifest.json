@@ -2,7 +2,7 @@
   "engine_key": "hamilton_ventocr",
   "display_name": "Hamilton",
   "developer": "VentOCR Developer Team",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "engine_api": 3,
   "ventocr_min": "0.6.2",
   "description": "Hamilton ventilator OCR engine. Breath = display update of Compliance / VTE. OCR (selectable): VTE, Compliance, Ppeak, MinVol, P0.1, mode, set rate / ΔPinsp / PEEP / oxygen. Waveforms: Paw (Pressure), Flow, Volume, and the 4th panel as Pes or Ptranspulm (option post_ocr.ptranspulm) with wrap-around sweep (50 px/s, 22 s per sweep on 1920x1080). Trigger: A (patient-triggered, pink triangle under the Paw time axis) / C (machine-triggered) / blank (unknown: the Paw panel was hidden or covered by a settings dialog, or the screen was cleared during the breath); a new triangle without a display update also starts a breath.",
@@ -63,15 +63,15 @@
     "P01_displayed"
   ],
   "labels": {
-    "Trigger": "トリガー（A: 自発 / C: 強制 / 空欄: わからない）",
-    "Ppeak": "Ppeak（ピーク圧）",
-    "MinVol": "MinVol（分時換気量）",
+    "Trigger": "Trigger (A: patient / C: machine / blank: unknown)",
+    "Ppeak": "Ppeak (peak pressure)",
+    "MinVol": "MinVol (minute volume)",
     "P01": "P0.1",
-    "Mode": "換気モード",
-    "Set_Rate": "呼吸回数（設定）",
-    "Set_Pinsp": "Δ吸気圧（設定）",
-    "Set_PEEP": "PEEP（設定）",
-    "Set_Oxygen": "酸素濃度（設定）",
+    "Mode": "Ventilation mode",
+    "Set_Rate": "Rate (setting)",
+    "Set_Pinsp": "ΔPinsp (setting)",
+    "Set_PEEP": "PEEP (setting)",
+    "Set_Oxygen": "Oxygen (setting)",
     "VTE_displayed": "VTE (displayed)",
     "Compliance_displayed": "Compliance (displayed)",
     "Ppeak_displayed": "Ppeak (displayed)",
@@ -216,12 +216,12 @@
     "breath_values": [
       {
         "name": "Trigger",
-        "label": "トリガー（A: 自発 / C: 強制 / 空欄: わからない）"
+        "label": "Trigger (A: patient / C: machine / blank: unknown)"
       },
       {
         "name": "VTE",
         "unit": "mL",
-        "format": "{:.0f}"
+        "format": "{:g}"
       },
       {
         "name": "Compliance",
@@ -230,13 +230,13 @@
       },
       {
         "name": "Ppeak",
-        "label": "Ppeak（ピーク圧）",
+        "label": "Ppeak (peak pressure)",
         "unit": "cmH2O",
-        "format": "{:.0f}"
+        "format": "{:g}"
       },
       {
         "name": "MinVol",
-        "label": "MinVol（分時換気量）",
+        "label": "MinVol (minute volume)",
         "unit": "L/min",
         "format": "{:.1f}"
       },
@@ -248,29 +248,29 @@
       },
       {
         "name": "Mode",
-        "label": "換気モード"
+        "label": "Ventilation mode"
       },
       {
         "name": "Set_Rate",
-        "label": "呼吸回数（設定）",
+        "label": "Rate (setting)",
         "unit": "b/min",
         "format": "{:.0f}"
       },
       {
         "name": "Set_Pinsp",
-        "label": "Δ吸気圧（設定）",
+        "label": "ΔPinsp (setting)",
         "unit": "cmH2O",
         "format": "{:.0f}"
       },
       {
         "name": "Set_PEEP",
-        "label": "PEEP（設定）",
+        "label": "PEEP (setting)",
         "unit": "cmH2O",
         "format": "{:.0f}"
       },
       {
         "name": "Set_Oxygen",
-        "label": "酸素濃度（設定）",
+        "label": "Oxygen (setting)",
         "unit": "%",
         "format": "{:.0f}"
       },
@@ -278,7 +278,7 @@
         "name": "VTE_displayed",
         "label": "VTE (displayed)",
         "unit": "mL",
-        "format": "{:.0f}"
+        "format": "{:g}"
       },
       {
         "name": "Compliance_displayed",
@@ -290,7 +290,7 @@
         "name": "Ppeak_displayed",
         "label": "Ppeak (displayed)",
         "unit": "cmH2O",
-        "format": "{:.0f}"
+        "format": "{:g}"
       },
       {
         "name": "MinVol_displayed",
@@ -308,74 +308,47 @@
     "alerts": [
       {
         "name": "TriggerSplit",
-        "label": {
-          "ja": "表示が変わらず、患者トリガーの三角で区切った呼吸",
-          "en": "Split by a patient-trigger triangle (no display update)"
-        },
+        "label": "Split by a patient-trigger triangle (no display update)",
         "exclude_from_accuracy": false
       },
       {
         "name": "Fragment",
-        "label": {
-          "ja": "録画の最初・最後で途中から始まる・切れている呼吸",
-          "en": "Cut at the start or end of the recording"
-        },
+        "label": "Cut at the start or end of the recording",
         "exclude_from_accuracy": true
       },
       {
         "name": "Abnormal",
-        "label": {
-          "ja": "ポップアップ・別の画面（縦軸の目盛りが読めない）",
-          "en": "Popup or another screen (axis labels not readable)"
-        },
+        "label": "Popup or another screen (axis labels not readable)",
         "exclude_from_accuracy": true
       },
       {
         "name": "Popup",
-        "label": {
-          "ja": "設定のダイアログなどが波形の欄を覆っていた",
-          "en": "A settings dialog covered the waveform area"
-        },
+        "label": "A settings dialog covered the waveform area",
         "exclude_from_accuracy": true
       },
       {
         "name": "Axis?",
-        "label": {
-          "ja": "目盛りを読めず、前の目盛りで換算した波形がある",
-          "en": "Axis labels not read; previous scale used"
-        },
+        "label": "Axis labels not read; previous scale used",
         "exclude_from_accuracy": false
       },
       {
         "name": "Long",
-        "label": {
-          "ja": "1周（22 秒）より長く、最後の1周分だけ",
-          "en": "Longer than one sweep (22 s); only the last sweep"
-        },
+        "label": "Longer than one sweep (22 s); only the last sweep",
         "exclude_from_accuracy": false
       },
       {
         "name": "Clipped",
-        "label": {
-          "ja": "縦軸の範囲を超えて切れた波形を読み直せなかった",
-          "en": "Waveform clipped at the axis range and not re-read"
-        },
+        "label": "Waveform clipped at the axis range and not re-read",
         "exclude_from_accuracy": true
       },
       {
         "name": "Partial",
-        "label": {
-          "ja": "波形の 3 割以上が空欄",
-          "en": "More than 30% of the waveform missing"
-        },
+        "label": "More than 30% of the waveform missing",
         "exclude_from_accuracy": true
       },
       {
         "name": "Cleared",
-        "label": {
-          "ja": "呼吸の途中で呼吸器の画面（波形）が消去された",
-          "en": "The ventilator cleared the waveform screen during the breath"
-        },
+        "label": "The ventilator cleared the waveform screen during the breath",
         "exclude_from_accuracy": false
       }
     ]
