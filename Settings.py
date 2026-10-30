@@ -195,3 +195,8 @@ WAVE_HUE_TOL = 12     # hue tolerance (circular distance)
 WAVE_SAT_MIN = 60     # saturation below this is background / gray axis line
 WAVE_VAL_MIN = 60     # value (brightness) below this is background
 WAVE_GAP_FILL = 6     # gaps of this width (px) or less are linearly interpolated
+# 0.2.6: columns within this time behind the pen tip of their read frame are read from the next breath's last frame instead
+# (the estimated pen tip can be a few px ahead of the line; Hamilton erases only 3-5 px ahead of the pen, so the previous pass showed there)
+WAVE_READ_NEAR_SEC = 0.3
+WAVE_READ_BLANK_SEC = 0.1   # if no later frame can be used, columns this close to the pen tip are left blank instead of guessed
+WAVE_READ_ERASE_PX = 8      # in the next pass, columns this far right of its pen tip (past the erase band) are still the old pass

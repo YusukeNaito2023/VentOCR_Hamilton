@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.5"
+ENGINE_VERSION = "0.2.6"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1063,12 +1063,13 @@ def _fill_small_gaps(v, max_gap):
     return v
 
 
-def extract_column_values(frame, xs, cal=None):
+def extract_column_values(frame, xs, cal=None, masks=None):
     """For each screen column xs (screen x, in time order), compute each waveform's value (physical units).
     cal: {wave name: (a, b)} (value = a*y + b, read from the vertical-axis ticks). Waveforms not present use the default ticks (ticks in Settings.WAVES).
     0.3.0: draw a globally optimal path through each column's "range the line passed through", keeping V-shaped tips (trace_columns).
     Previously the median y of each column's pixels was used, which landed mid-stroke in columns with vertical strokes (e.g. Flow inspiration->expiration switch) and made tips shallow."""
-    masks = _wave_masks(frame)
+    if masks is None:
+        masks = _wave_masks(frame)   # 0.2.6: callers reading several breaths from one frame pass the cached masks (frame then only gives the size)
     scale = frame.shape[0] / 720
     out = {}
     for name, (y0, m, d) in masks.items():
@@ -1350,6 +1351,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     rate = float(df_frames["Sweep_Rate"].iloc[0]) if len(df_frames) else Settings.SWEEP_PX_PER_SEC
     times = frame_no / fps
     pos_of_frame = {int(f): i for i, f in enumerate(frame_no)}
+    # 0.2.6: later read frame for the columns behind the pen tip = the next breath's last frame; axis codes to skip a frame mid-redraw (axis just changed)
+    ends = [pos_of_frame.get(int(f)) if pd.notna(f) else None for f in df_breaths["End_Frame"]]
+    next_end = {k: ends[i + 1] for i, k in enumerate(df_breaths.index[:-1])}
+    axis_code = df_frames[[f"Axis_{n}" for n in Settings.WAVES if f"Axis_{n}" in df_frames]].astype(str).agg("|".join, axis=1).to_numpy()
+    mask_cache = {}   # frame position -> (normalized frame, colour masks) for the last few frames read (read() below)
+    pass_reach = pd.Series(np.where(detected == 1, pen, -np.inf)).groupby(pas).max().to_dict()   # farthest pen tip found in each pass
 
     def frame_cal(i):
         """Vertical-axis conversion at frame i {wave name: (a, b)}."""
@@ -1414,20 +1421,57 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             for q, (cf, seen) in capped.items():
                 blank |= (pc == q) & (img == cf) & (x > pen[seen] + 0.5) & valid
             valid &= ~blank
+        pass_col = np.where(before, pas[kb], pas[kk])
+        # 0.2.6: columns just behind the pen tip of their read frame are read from a later frame. The estimated pen tip is sometimes a few px
+        # ahead of the drawn line, and Hamilton erases only 3-5 px ahead of the pen, so those columns showed the previous pass's waveform
+        # (spikes in all 4 waves at once, Ptranspulm 2026-10-09 B406 / B101 / B56). Drawn columns stay on screen until the next pass,
+        # so the next breath's last frame (already read for that breath, no extra decoding) shows them away from the pen tip.
+        # If that frame can't be used (popup, clear, mid-redraw after an axis change, too far), keep the read frame and blank the columns within WAVE_READ_BLANK_SEC
+        g = next_end.get(k)
+        near = valid & ~abn[img].astype(bool) & (pass_col == pas[img]) & (x > pen[img] - Settings.WAVE_READ_NEAR_SEC * rate)
+        if near.any():
+            for im in np.unique(img[near]):
+                sel = near & (img == im)
+                ok = g is not None and g > im and not abn[g] and not (wrap[im + 1:g + 1] == 2).any() \
+                    and g >= 2 and axis_code[g] == axis_code[g - 1] == axis_code[g - 2]   # not mid-redraw (read with g's own scale)
+                if ok:
+                    q = pas[im]
+                    if pas[g] == q:
+                        move = sel
+                    elif pas[g] == q + 1 and q not in capped:
+                        # still right of the next pass's pen tip and erase band, and not beyond the farthest pen tip found in pass q
+                        # (when a pass wraps before reaching the right edge, the last columns still show the pass before it)
+                        move = sel & (x > pen[g] + Settings.WAVE_READ_ERASE_PX) & (x <= pass_reach.get(q, -np.inf) + 0.5)
+                    else:
+                        move = np.zeros(len(u), bool)
+                else:
+                    move = np.zeros(len(u), bool)
+                img = np.where(move, g if g is not None else img, img)
+                drop = sel & ~move & (x > pen[im] - Settings.WAVE_READ_BLANK_SEC * rate)
+                blank |= drop
+                valid &= ~drop
         xi = np.clip(np.round(x).astype(int), XL, XR - 1)
 
         vals = {name: np.full(len(u), np.nan) for name in Settings.WAVES}
-        pass_col = np.where(before, pas[kb], pas[kk])
         reread = []
         popup = []
         ok_any = bool(blank.any())
 
         def read(im, sel, names=None):
-            path = os.path.join(frames_root, f"frame_{int(frame_no[im]):08d}.jpg")
-            frame = cv2.imread(path) if os.path.isfile(path) else None
-            if frame is None:
-                return False
-            got = extract_column_values(_normalize_frame(frame), xi[sel], frame_cal(im))
+            # 0.2.6: the next breath's last frame is now also read for this breath's last columns, so keep the colour masks of
+            # the last few frames instead of classifying the whole frame again (+18 s per hour otherwise)
+            hit = mask_cache.get(im)
+            if hit is None:
+                path = os.path.join(frames_root, f"frame_{int(frame_no[im]):08d}.jpg")
+                frame = cv2.imread(path) if os.path.isfile(path) else None
+                if frame is None:
+                    return False
+                frame = _normalize_frame(frame)
+                hit = (frame, _wave_masks(frame))
+                mask_cache[im] = hit
+                while len(mask_cache) > 4:
+                    mask_cache.pop(next(iter(mask_cache)))
+            got = extract_column_values(hit[0], xi[sel], frame_cal(im), masks=hit[1])
             for name in names or Settings.WAVES:
                 vals[name][sel] = got[name]
             return True

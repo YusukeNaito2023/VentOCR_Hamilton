@@ -29,6 +29,9 @@
     The panel name is not read, so choose the correct setting for each video. Videos in which the display was switched during the recording are not supported
   - The sweep draws from left to right at 50 px/s; on reaching x=1567 it returns to x=467 and overwrites (one sweep 22 s, wrap around)
   - In each frame, the right edge of the columns that changed since the previous frame (= pen (sweep head) + 3 px erase band) is recorded, and the pen is tracked in every frame (0.6.0; core.track_sweep)
+  - Each column is read from the breath's last frame (or the last frame of its pass). Columns within 0.3 s behind the pen tip of that frame are read
+    from the next breath's last frame instead, where they are well behind the pen (0.2.6: a pen tip estimated a few px too far showed the previous pass's waveform there).
+    If that frame can't be used (popup, clear, mid-redraw after an axis change, overwritten by the next pass), the columns within 0.1 s of the pen tip are left blank
   - Drawing can stop (e.g. due to screen operations), after which the whole screen is cleared and drawing restarts from the left edge mid-breath. The part before that is read from the last frame
     in which the pen was found before the clearing (0.2.3; the return to the left edge is only recognized a few frames later, and up to 0.2.2 the cleared screen was read).
     The period during which drawing was stopped is blank (breaths with 30% or more blank get Partial in Alert). Breaths during which the screen was cleared get Cleared in Alert (0.2.3).

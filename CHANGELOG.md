@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## 0.2.6 (2026-10-30)
+### Spikes in all four waveforms at a breath's last columns (previous pass read near the pen tip)
+- Each breath's columns were read from its last frame, so the last few columns sat right behind the pen tip. Hamilton erases only 3–5 px ahead
+  of the pen, and the estimated pen tip is sometimes a few px too far, so those columns showed the previous pass's waveform: a short spike in Paw,
+  Flow, Volume and the 4th wave at the same moment (Ptranspulm 2026-10-09: B406, B101 and B56 (end) of the Analysis 3/4 form; 2026-10-08: B323).
+  About 80% of the points that disagreed with the Study Recorder by more than Paw 2 cmH2O / Flow 10 L/min / Volume 50 mL / 2 cmH2O were of this kind
+- Columns within WAVE_READ_NEAR_SEC (0.3 s) behind the pen tip of their read frame are now read from the next breath's last frame
+  (already read for that breath, so no extra decoding). Drawn columns stay on screen until the next pass
+  - In the next pass, only columns right of its pen tip and erase band (WAVE_READ_ERASE_PX 8) and not beyond the farthest pen tip found in the
+    earlier pass (a pass that wraps before the right edge leaves the pass before it in the last columns)
+  - If the vertical axis changed in between, the frame is read with its own scale, provided the scale is the same on it and the 2 frames before (not mid-redraw)
+  - If no later frame can be used (popup, clear, mid-redraw, too far), the columns within WAVE_READ_BLANK_SEC (0.1 s) of the pen tip are left blank instead of guessed
+- Colour masks of the last 4 frames are kept, so reading a frame for two breaths does not classify it twice (no change in analysis time)
+- Effect (Study Recorder, point by point after aligning each breath by Paw cross-correlation; breaths without Alert):
+  - 2026-10-09, 0.8.0 form: disturbed points 258 (98 breaths) → 132 (61). Analysis 3/4 form: 310 (107) → 178 (67). 2026-10-08: 19 (8) → 12 (6)
+  - Breath count, boundaries, values (VTE, Compliance, Ppeak and *_displayed) and Trigger unchanged; median and 90th-percentile waveform errors unchanged or slightly smaller
+  - Wave_Missing (mean) 0.0096 → 0.0084 (0.8.0 form), 0.0113 → 0.0092 (Analysis 3/4 form)
+  - Alert: 2026-10-09 B69 Clipped → none, 2026-10-08 B835 Clipped → none (the clipped columns could now be re-read from a frame with a wider axis;
+    B69 Paw peak 19.85, Study Recorder 19.93); 2026-10-08 B497 Cleared,Partial → Cleared (missing 0.366 → 0.28)
+- Not changed in this version: Paw dips at trigger triangles caused by JPEG colour bleed of the red triangle (B56, B464 …), and a pen tip misread
+  right after a wrap (B727 of the 0.8.0 form)
+
 ## 0.2.5 (2026-10-25)
 From this version on, the engine's user-facing text is in English (manifest labels, settings, README, code comments and docstrings).
 Entries for earlier versions below are kept in Japanese.
