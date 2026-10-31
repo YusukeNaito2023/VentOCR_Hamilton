@@ -32,6 +32,8 @@
   - Each column is read from the breath's last frame (or the last frame of its pass). Columns within 0.3 s behind the pen tip of that frame are read
     from the next breath's last frame instead, where they are well behind the pen (0.2.6: a pen tip estimated a few px too far showed the previous pass's waveform there).
     If that frame can't be used (popup, clear, mid-redraw after an axis change, overwritten by the next pass), the columns within 0.1 s of the pen tip are left blank
+  - Paw pixels on and just around a patient-trigger triangle (2 px margin) are ignored, unless the Paw line just left or right of the triangle runs at its height
+    (0.2.7: JPEG compression bleeds the triangle's red edge into the Paw colour, and the steep rise at the start of inspiration then read about 1.7 cmH2O too low)
   - Drawing can stop (e.g. due to screen operations), after which the whole screen is cleared and drawing restarts from the left edge mid-breath. The part before that is read from the last frame
     in which the pen was found before the clearing (0.2.3; the return to the left edge is only recognized a few frames later, and up to 0.2.2 the cleared screen was read).
     The period during which drawing was stopped is blank (breaths with 30% or more blank get Partial in Alert). Breaths during which the screen was cleared get Cleared in Alert (0.2.3).

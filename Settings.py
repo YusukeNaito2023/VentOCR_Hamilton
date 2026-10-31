@@ -200,3 +200,5 @@ WAVE_GAP_FILL = 6     # gaps of this width (px) or less are linearly interpolate
 WAVE_READ_NEAR_SEC = 0.3
 WAVE_READ_BLANK_SEC = 0.1   # if no later frame can be used, columns this close to the pen tip are left blank instead of guessed
 WAVE_READ_ERASE_PX = 8      # in the next pass, columns this far right of its pen tip (past the erase band) are still the old pass
+WAVE_TRIANGLE_PAD = (2, 10) # Paw pixels within 2 rows above/below a trigger triangle's box and 10 columns of its apex are dropped (0.2.7)
+WAVE_TRIANGLE_SIDE_PX = 6   # ... unless the Paw line within this many columns left or right of the box runs at the box's height

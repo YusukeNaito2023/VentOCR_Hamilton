@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.2.7 (2026-10-31)
+### Paw dips at the patient-trigger triangle (JPEG colour bleed)
+- Frames are saved as JPEG, and compression bleeds the red edge of the trigger triangle into the Paw colour (y 271-276 with the 0-20 axis).
+  The steep rise at the start of inspiration often has no Paw pixels left after compression, so the trace took the bleed and Paw dipped to
+  about -1.7 cmH2O for 1-4 points right after the triangle (Ptranspulm 2026-10-09: B56, B464, B590 and others; not seen in PNG frames)
+- Paw pixels from 2 rows above to 2 rows below the triangle and within WAVE_TRIANGLE_PAD (10 px) of its apex are now ignored, unless the
+  Paw line within WAVE_TRIANGLE_SIDE_PX (6 px) left or right of that box runs at the triangle's height (Paw near 0; the pixels may then be
+  the real line). The rise is then interpolated across the gap. Columns come from the apex, because a triangle split by the time-axis
+  tick numbers is detected narrower than it is
+- Effect (Study Recorder, point by point after aligning each breath by Paw cross-correlation; breaths without Alert), 2026-10-09:
+  - All triangle dips are gone: 0.8.0 form 12 breaths (B56, 58, 265, 319, 464, 590, 723, 918, 941, 1040, 1171 and one more point in B1170),
+    Analysis 3/4 form 11 breaths (B56, 58, 265, 319, 464, 590, 668, 1029, 1171, 1222 and B1170)
+  - Disturbed points: 0.8.0 form 132 (61 breaths) -> 105 (51); Analysis 3/4 form 178 (67) -> 153 (57). Paw alone 51 -> 24 and 79 -> 55
+  - Only Paw changed, only within 18.5 px of a triangle (other columns of the same read move by at most 0.06 cmH2O, as the trace is one path).
+    Breath count, boundaries, values (VTE, Compliance, Ppeak and *_displayed), Trigger, Alert and Wave_Missing unchanged
+- Building the colour masks of a frame takes about 4 ms longer (triangle detection), about 5-10 s per hour of video
+
 ## 0.2.6 (2026-10-30)
 ### Spikes in all four waveforms at a breath's last columns (previous pass read near the pen tip)
 - Each breath's columns were read from its last frame, so the last few columns sat right behind the pen tip. Hamilton erases only 3–5 px ahead

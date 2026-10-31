@@ -24,7 +24,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_scale
 
-ENGINE_VERSION = "0.2.6"
+ENGINE_VERSION = "0.2.7"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1023,16 +1023,34 @@ def _wave_masks(frame):
         d = np.abs(h[..., 0].astype(np.int16) - spec["hue"])
         d = np.minimum(d, 180 - d)
         out[name] = (y0, (d <= Settings.WAVE_HUE_TOL) & (h[..., 1] >= Settings.WAVE_SAT_MIN) & (h[..., 2] >= Settings.WAVE_VAL_MIN), d)
+    # 0.2.7: drop Paw pixels on and just around the patient-trigger triangles. JPEG compression bleeds the triangle's red edge into the
+    # Paw hue (y 271-276 at 0-20). The steep rise at the start of inspiration often has no Paw pixels left after compression, so the
+    # trace took that bleed and Paw dipped by about 1.7 cmH2O (Ptranspulm 2026-10-09, B56 and B464). Kept if the Paw line just left or
+    # right of the triangle runs at the triangle's height (Paw near 0), since the pixels in the box may then be the real line
+    if "Pressure" in out:
+        y0, m, d = out["Pressure"]
+        my, mx = Settings.WAVE_TRIANGLE_PAD
+        side = Settings.WAVE_TRIANGLE_SIDE_PX
+        t0, t1 = Settings.TRIGGER_ROWS
+        for apex, _, y, _, h in _trigger_blobs(hsv[t0:t1]):
+            # columns from the apex, not the detected box: a triangle split by the tick numbers can be detected narrower than it is
+            r0, r1 = max(y - my - y0, 0), min(y + h + my - y0, m.shape[0])
+            c0, c1 = max(int(round(apex)) - mx, 0), min(int(round(apex)) + mx + 1, m.shape[1])
+            if r0 >= r1 or c0 >= c1:
+                continue
+            if m[r0:r1, max(c0 - side, 0):c0].any() or m[r0:r1, c1:c1 + side].any():
+                continue
+            m[r0:r1, c0:c1] = False
     return out
 
 
-def trigger_apexes(frame):
-    """List of x (screen columns) of patient-trigger triangle apexes. frame is BGR already passed through _normalize_frame."""
-    y0, y1 = Settings.TRIGGER_ROWS
+def _trigger_blobs(hsv):
+    """Patient-trigger triangles in the HSV image of rows TRIGGER_ROWS (full width): list of (apex x, box x, box y, box width, box height) in screen pixels."""
+    y0 = Settings.TRIGGER_ROWS[0]
     # 0.2.5: search only the waveform area (plus a margin for the triangle width). Undecoded (not re-encoded) frames show pink in the
     # numbers panel on the left (x about 52), which was picked up as a triangle
     xa, xb = Settings.SWEEP_X_LEFT - Settings.TRIGGER_X_MARGIN, Settings.SWEEP_X_RIGHT + Settings.TRIGGER_X_MARGIN
-    hsv = cv2.cvtColor(frame[y0:y1, xa:xb], cv2.COLOR_BGR2HSV)
+    hsv = hsv[:, xa:xb]
     d = np.abs(hsv[..., 0].astype(np.int16) - Settings.TRIGGER_HUE)
     d = np.minimum(d, 180 - d)
     mask = ((d <= Settings.TRIGGER_HUE_TOL) & (hsv[..., 1] >= Settings.TRIGGER_SAT_MIN)
@@ -1050,8 +1068,14 @@ def trigger_apexes(frame):
         if len(ys) == 0:
             continue
         top = ys < ys.min() + Settings.TRIGGER_APEX_ROWS
-        out.append(float(xa + x + xs[top].mean()))
+        out.append((float(xa + x + xs[top].mean()), int(xa + x), int(y0 + y), int(w), int(h)))
     return out
+
+
+def trigger_apexes(frame):
+    """List of x (screen columns) of patient-trigger triangle apexes. frame is BGR already passed through _normalize_frame."""
+    y0, y1 = Settings.TRIGGER_ROWS
+    return [b[0] for b in _trigger_blobs(cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2HSV))]
 
 
 def _fill_small_gaps(v, max_gap):
